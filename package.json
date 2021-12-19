@@ -1,0 +1,36 @@
+{
+  "name": "marker-cluster",
+  "version": "1.0.0",
+  "description": "",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Krombik/marker-cluster.git"
+  },
+  "author": "",
+  "license": "MIT",
+  "bugs": {
+    "url": "https://github.com/Krombik/marker-cluster/issues"
+  },
+  "homepage": "https://github.com/Krombik/marker-cluster#readme",
+  "type": "module",
+  "source": "src/index.ts",
+  "exports": {
+    "require": "./dist/marker-cluster.cjs",
+    "default": "./dist/marker-cluster.modern.js"
+  },
+  "main": "./dist/marker-cluster.cjs",
+  "module": "./dist/marker-cluster.module.js",
+  "types": "./dist/index.d.ts",
+  "unpkg": "./dist/marker-cluster.umd.js",
+  "scripts": {
+    "build": "microbundle",
+    "dev": "microbundle watch"
+  },
+  "devDependencies": {
+    "microbundle-crl": "^0.13.11",
+    "typescript": "^4.5.4"
+  },
+  "files": [
+    "dist"
+  ]
+}
