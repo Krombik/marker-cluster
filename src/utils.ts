@@ -1,39 +1,44 @@
-import { ClusterMap, ClusterStore, Point, XAxis } from "./types";
+import { Bool, ClusterMap, ClusterStore, Point, XAxis } from "./types";
 
-const lngToX = (lng: number) => lng / 360 + 0.5;
+export const clamp = (min: number, value: number, max: number) =>
+  Math.min(Math.max(value, min), max);
 
-const latToY = (lat: number) => {
+export const lngToX = (lng: number) => lng / 360 + 0.5;
+
+export const latToY = (lat: number) => {
   const sin = Math.sin((lat * Math.PI) / 180);
 
-  const y = 0.5 - (0.25 * Math.log((1 + sin) / (1 - sin))) / Math.PI;
-
-  return y < 0 ? 0 : y > 1 ? 1 : y;
+  return clamp(0, 0.5 - (0.25 * Math.log((1 + sin) / (1 - sin))) / Math.PI, 1);
 };
 
 export const boundedLngToX = (lng: number) =>
   lngToX(((((lng + 180) % 360) + 360) % 360) - 180);
 
-export const boundedLatToY = (lat: number) =>
-  latToY(Math.max(-90, Math.min(90, lat)));
+export const boundedLatToY = (lat: number) => latToY(clamp(-90, lat, 90));
 
-const xToLng = (x: number) => (x - 0.5) * 360;
+export const xToLng = (x: number) => (x - 0.5) * 360;
 
-const yToLat = (y: number) =>
+export const yToLat = (y: number) =>
   (360 * Math.atan(Math.exp((1 - y * 2) * Math.PI))) / Math.PI - 90;
 
-const pair = (a: number, b: number) => {
+export const pair = (a: number, b: number) => {
   const sum = a + b;
 
   return (sum * (sum + 1)) / 2 + b;
 };
 
-type QueueItems<T> = [
+export const pixelsToDistance = (
+  pixels: number,
+  extent: number,
+  zoom: number
+) => pixels / (extent * Math.pow(2, zoom));
+
+type Queue<T> = [
+  yMax: number,
   xMin: number,
   xMax: number,
   items: [y: number, x: number, p: Point<T>]
 ];
-
-type Queue<T> = [yMax: number, queueItems: QueueItems<T>];
 
 export const addDot = <T>(
   map: ClusterMap<T>,
@@ -51,137 +56,110 @@ export const addDot = <T>(
 };
 
 const addDots = <T>(
-  queueItems: QueueItems<T>,
+  data: Queue<T>[3],
   map: any,
   arr: number[],
   zoom: number
 ) => {
-  for (let j = 2; j < queueItems.length; j += 3) {
-    const data = queueItems[j] as QueueItems<T>[2];
+  if (data.length > 3) {
+    const yx = data.splice(0, 2) as [y: number, x: number];
 
-    if (data.length > 3) {
-      const yx = data.splice(0, 2) as [y: number, x: number];
+    const l = data.length;
 
-      const l = data.length;
+    const y = yx[0] / l;
+    const x = yx[1] / l;
 
-      const y = yx[0] / l;
-      const x = yx[1] / l;
+    let count = 0;
 
-      let count = 0;
-
-      for (let i = data.length; i--; ) {
-        count += (data[i] as Point<T>).count || 1;
-      }
-
-      addDot(map, arr, y, x, {
-        items: data as Point<T>[],
-        coords: [yToLat(y), xToLng(x)],
-        key: pair(x, y),
-        count,
-        zoom,
-      });
-    } else {
-      addDot(map, arr, data[0], data[1], data[2]);
+    for (let i = data.length; i--; ) {
+      count += (data[i] as Point<T>).count || 1;
     }
+
+    addDot(map, arr, y, x, {
+      items: data as Point<T>[],
+      coords: [yToLat(y), xToLng(x)],
+      key: pair(x, y),
+      count,
+      zoom,
+    });
+  } else {
+    addDot(map, arr, data[0], data[1], data[2]);
   }
 };
 
-const clusteringQueueItems = <T>(
-  queueItems: QueueItems<T>,
+const clusteringQueue = <T>(
+  queue: Queue<T>,
+  startMinXIndex: number,
   y: number,
   x: number,
-  p: Point<T>
-) => {
-  let clustered = false;
-
-  for (let i = 0; i < queueItems.length; i += 3) {
-    if (x >= queueItems[i] && x <= queueItems[i + 1]) {
-      const items = queueItems[i + 2] as QueueItems<T>[2];
+  p: Point<T>,
+  r: number
+): Bool => {
+  for (let j = startMinXIndex; j < queue.length; j += 4) {
+    if (x >= queue[j] && x <= queue[j + 1]) {
+      const items = queue[j + 2] as Queue<T>[3];
 
       items[0] += y;
       items[1] += x;
       items.push(p);
 
-      clustered = true;
+      return 1;
     }
   }
 
-  return clustered;
+  queue.push(y + 2 * r, x - r, x + r, [y, x, p]);
+
+  return 0;
 };
 
-const clusteringQueue = <T>(
-  queue: Queue<T>,
-  startIndex: number,
-  y: number,
-  x: number,
-  p: Point<T>
-) => {
-  for (let j = startIndex; j < queue.length; j += 2) {
-    if (clusteringQueueItems(queue[j] as QueueItems<T>, y, x, p)) return true;
-  }
-
-  return false;
-};
-
-type MutateQueueData = [index: number, clustered?: true];
+type QueueIndexRef = [index: number];
 
 const mutateQueue = <T>(
   queue: Queue<T>,
-  data: MutateQueueData,
+  data: QueueIndexRef,
   y: number,
   arrX: XAxis<T>,
   r: number
-) => {
+): Bool => {
   let i = data[0];
 
   while (y > queue[i]) {
-    i += 2;
+    i += 4;
   }
 
   data[0] = i;
 
-  let notPushed = true;
+  let clustered: Bool = 0;
+
+  const startMinXIndex = i + 1;
 
   for (let j = 0; j < arrX.length; j += 2) {
-    const x = arrX[j] as number;
-    const p = arrX[j + 1] as Point<T>;
-
-    if (!clusteringQueue(queue, i + 1, y, x, p)) {
-      if (notPushed) {
-        queue.push(y + 2 * r, [x - r, x + r, [y, x, p]]);
-
-        notPushed = false;
-      } else {
-        (queue[queue.length - 1] as QueueItems<T>).push(x - r, x + r, [
-          y,
-          x,
-          p,
-        ]);
-      }
-    } else {
-      data[1] = true;
-    }
+    clustered |= clusteringQueue(
+      queue,
+      startMinXIndex,
+      y,
+      arrX[j] as number,
+      arrX[j + 1] as Point<T>,
+      r
+    );
   }
-};
 
-export const pixelsToDistance = (
-  pixels: number,
-  extent: number,
-  zoom: number
-) => pixels / (extent * Math.pow(2, zoom));
+  return clustered as Bool;
+};
 
 export const getStore = <T>(
   map: ClusterMap<T>,
-  arr: number[],
+  arr: ArrayBufferLike,
   minZoom: number,
   maxZoom: number,
   radius: number,
   extent: number
 ) => {
   const store: ClusterStore<T> = new Map();
-  store.set(maxZoom + 1, { map, arrY: new Float64Array(arr).sort() });
+  store.set(maxZoom + 1, { map, arrY: new Float64Array(arr) });
 
   const fn = (z: number) => {
+    const t1 = performance.now();
     const r = pixelsToDistance(radius, extent, z);
 
     const tree = store.get(z + 1)!;
@@ -192,22 +170,22 @@ export const getStore = <T>(
 
     const queue: Queue<T> = [] as any;
 
-    const data: MutateQueueData = [0];
+    const queueIndexRef: QueueIndexRef = [0];
 
+    let clustered: Bool = 0;
     for (let i = 0; i < l; i++) {
       const y = arrY[i];
 
-      mutateQueue(queue, data, y, map.get(y)!, r);
+      clustered |= mutateQueue(queue, queueIndexRef, y, map.get(y)!, r);
     }
-
-    if (data[1]) {
+    if (clustered) {
       const map: ClusterMap<T> = new Map();
       const arr: number[] = [];
 
       const l = queue.length;
 
-      for (let i = 1; i < l; i += 2) {
-        addDots(queue[i] as QueueItems<T>, map, arr, z);
+      for (let i = 3; i < l; i += 4) {
+        addDots(queue[i] as Queue<T>[3], map, arr, z);
       }
 
       store.set(z, {
@@ -217,6 +195,7 @@ export const getStore = <T>(
     } else {
       store.set(z, tree);
     }
+    console.log(performance.now() - t1);
   };
 
   for (let z = maxZoom; z >= minZoom; z--) {

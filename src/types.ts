@@ -40,3 +40,5 @@ export type ClusterMap<T> = Map<number, XAxis<T>>;
 export type ClusterObj<T> = { map: ClusterMap<T>; arrY: Float64Array };
 
 export type ClusterStore<T> = Map<number, ClusterObj<T>>;
+
+export type Bool = 0 | 1;

@@ -1,5 +1,15 @@
 import { ClusterMap, XOR } from "./types";
-import { getStore } from "./utils";
+import {
+  getStore,
+  clamp,
+  pixelsToDistance,
+  addDot,
+  pair,
+  boundedLatToY,
+  boundedLngToX,
+  latToY,
+  lngToX,
+} from "./utils";
 
 type Coords = [lat: number, lng: number];
 
@@ -47,179 +57,11 @@ export type GetClustersArg = [
   northLat: number
 ];
 
-const lngToX = (lng: number) => lng / 360 + 0.5;
-
-const latToY = (lat: number) => {
-  const sin = Math.sin((lat * Math.PI) / 180);
-
-  const y = 0.5 - (0.25 * Math.log((1 + sin) / (1 - sin))) / Math.PI;
-
-  return y < 0 ? 0 : y > 1 ? 1 : y;
-};
-
-const boundedLngToX = (lng: number) =>
-  lngToX(((((lng + 180) % 360) + 360) % 360) - 180);
-
-const boundedLatToY = (lat: number) => latToY(Math.max(-90, Math.min(90, lat)));
-
-const xToLng = (x: number) => (x - 0.5) * 360;
-
-const yToLat = (y: number) =>
-  (360 * Math.atan(Math.exp((1 - y * 2) * Math.PI))) / Math.PI - 90;
-
-const pair = (a: number, b: number) => {
-  const sum = a + b;
-
-  return (sum * (sum + 1)) / 2 + b;
-};
-
-// const getX = <T>(v: ClustererPoint<T>) => v._x;
-// const getY = <T>(v: ClustererPoint<T>) => v._y;
-
-type QueueItems<T> = [
-  xMin: number,
-  xMax: number,
-  items: [y: number, x: number, p: Point<T>]
-];
-
-type Queue<T> = [yMax: number, queueItems: QueueItems<T>];
-
-const addDot = <T>(
-  map: Map<number, [x: number, p: Point<T>]>,
-  arr: number[],
-  y: number,
-  x: number,
-  p: Point<T>
-) => {
-  if (map.has(y)) {
-    map.get(y)!.push(x, p);
-  } else {
-    map.set(y, [x, p]);
-    arr.push(y);
-  }
-};
-
-const addDots = <T>(
-  queueItems: QueueItems<T>,
-  map: any,
-  arr: number[],
-  zoom: number
-) => {
-  // const clusters = [];
-
-  for (let j = 2; j < queueItems.length; j += 3) {
-    const data = queueItems[j] as QueueItems<T>[2];
-
-    if (data.length > 3) {
-      const yx = data.splice(0, 2) as [y: number, x: number];
-
-      const l = data.length;
-
-      const y = yx[0] / l;
-      const x = yx[1] / l;
-
-      let count = 0;
-
-      for (let i = data.length; i--; ) {
-        count += (data[i] as Point<T>).count || 1;
-      }
-
-      addDot(map, arr, y, x, {
-        items: data as Point<T>[],
-        coords: [yToLat(y), xToLng(x)],
-        key: pair(x, y),
-        count,
-        zoom,
-      });
-    } else {
-      addDot(map, arr, data[0], data[1], data[2]);
-    }
-  }
-};
-
-const clusteringQueueItems = <T>(
-  queueItems: QueueItems<T>,
-  y: number,
-  x: number,
-  p: Point<T>
-) => {
-  let clustered = false;
-
-  for (let i = 0; i < queueItems.length; i += 3) {
-    if (x >= queueItems[i] && x <= queueItems[i + 1]) {
-      const items = queueItems[i + 2] as QueueItems<T>[2];
-
-      items[0] += y;
-      items[1] += x;
-      items.push(p);
-
-      clustered = true;
-    }
-  }
-
-  return clustered;
-};
-
-const clusteringQueue = <T>(
-  queue: Queue<T>,
-  startIndex: number,
-  y: number,
-  x: number,
-  p: Point<T>
-) => {
-  for (let j = startIndex; j < queue.length; j += 2) {
-    if (clusteringQueueItems(queue[j] as QueueItems<T>, y, x, p)) return true;
-  }
-
-  return false;
-};
-
-type MutateQueueData = [index: number, clustered?: true];
-
-const mutateQueue = <T>(
-  queue: Queue<T>,
-  data: MutateQueueData,
-  y: number,
-  arrX: [x: number, p: Point<T>],
-  r: number
-) => {
-  let i = data[0];
-
-  while (y > queue[i]) {
-    i += 2;
-  }
-
-  data[0] = i;
-
-  let notPushed = true;
-
-  for (let j = 0; j < arrX.length; j += 2) {
-    const x = arrX[j] as number;
-    const p = arrX[j + 1] as Point<T>;
-
-    if (!clusteringQueue(queue, i + 1, y, x, p)) {
-      if (notPushed) {
-        queue.push(y + 2 * r, [x - r, x + r, [y, x, p]]);
-
-        notPushed = false;
-      } else {
-        (queue[queue.length - 1] as QueueItems<T>).push(x - r, x + r, [
-          y,
-          x,
-          p,
-        ]);
-      }
-    } else {
-      data[1] = true;
-    }
-  }
-};
-
-/**
- * @param expand
- * @default 0
- */
 type GetPoints<T> = {
+  /**
+   * @param expand
+   * @default 0
+   */
   (
     zoom: number,
     westLng: number,
@@ -228,6 +70,10 @@ type GetPoints<T> = {
     northLat: number,
     expand?: number
   ): Point<T>[];
+  /**
+   * @param expand
+   * @default 0
+   */
   <M, C>(
     zoom: number,
     westLng: number,
@@ -257,12 +103,9 @@ class MarkerCluster<T> {
     };
   }
 
-  private _pixelsToDistance(pixels: number, zoom: number) {
-    return pixels / (this._options.extent * Math.pow(2, zoom));
-  }
-
   private _initCluster(arrY: number[], map: ClusterMap<T>, points: T[]) {
     const { getLatLng } = this._options;
+
     for (let i = points.length; i--; ) {
       const p = points[i];
 
@@ -280,10 +123,14 @@ class MarkerCluster<T> {
   }
 
   async loadAsync(points: T[], onLoad: () => void) {
+    let t1 = performance.now();
     const worker = new Worker(new URL("./worker.js", import.meta.url), {
       type: "module",
     });
 
+    console.log(performance.now() - t1);
+
+    t1 = performance.now();
     const { minZoom, maxZoom, extent, radius } = this._options;
 
     const map: ClusterMap<T> = new Map();
@@ -291,13 +138,18 @@ class MarkerCluster<T> {
     const arr: number[] = [];
 
     this._initCluster(arr, map, points);
-
+    console.log(performance.now() - t1);
+    t1 = performance.now();
     worker.addEventListener("message", (e) => {
-      console.log(e.data);
       this._store = e.data;
+      console.log(performance.now() - t1);
       onLoad();
+      // console.log(kek);
     });
-    worker.postMessage({ map, arr, minZoom, maxZoom, extent, radius });
+    const bek = new Float64Array(arr).sort().buffer;
+    worker.postMessage({ map, arr: bek, minZoom, maxZoom, extent, radius }, [
+      bek,
+    ]);
   }
 
   load(points: T[]) {
@@ -309,7 +161,14 @@ class MarkerCluster<T> {
 
     this._initCluster(arr, map, points);
 
-    this._store = getStore(map, arr, minZoom, maxZoom, radius, extent);
+    this._store = getStore(
+      map,
+      new Float64Array(arr).sort().buffer,
+      minZoom,
+      maxZoom,
+      radius,
+      extent
+    );
   }
 
   getPoints = ((
@@ -347,13 +206,10 @@ class MarkerCluster<T> {
       const expandY =
         Math.abs(expand) < 1
           ? (maxY - minY) * expand
-          : (expandX = this._pixelsToDistance(expand, zoom));
+          : (expandX = pixelsToDistance(expand, this._options.extent, zoom));
 
-      minY -= expandY;
-      maxY += expandY;
-
-      if (minY < 0) minY = 0;
-      if (maxY > 1) maxY = 1;
+      minY = clamp(0, minY - expandY, 1);
+      maxY = clamp(0, maxY + expandY, 1);
     }
 
     let minX: number;
@@ -366,11 +222,8 @@ class MarkerCluster<T> {
       if (expand) {
         expandX ||= Math.abs(maxX - minX) * expand;
 
-        minX -= expandX;
-        maxX += expandX;
-
-        if (minY < 0) minY = 0;
-        if (maxY > 1) maxY = 1;
+        minX = clamp(0, minX - expandX, 1);
+        maxX = clamp(0, maxX + expandX, 1);
       }
 
       if (minX > maxX) {
@@ -397,7 +250,9 @@ class MarkerCluster<T> {
     maxY: number,
     zoom: number
   ) {
-    const { map, arrY } = this._store.get(this._limitZoom(zoom))!;
+    const { minZoom, maxZoom } = this._options;
+
+    const { map, arrY } = this._store.get(clamp(minZoom, zoom, maxZoom + 1))!;
 
     let start = 0;
     let end = arrY.length - 1;
@@ -437,13 +292,6 @@ class MarkerCluster<T> {
         }
       }
     }
-  }
-
-  private _limitZoom(z: number) {
-    return Math.max(
-      this._options.minZoom,
-      Math.min(z, this._options.maxZoom + 1)
-    );
   }
 }
 
