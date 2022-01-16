@@ -212,7 +212,7 @@ class MarkerCluster<T> {
 
       const pointsLength = prevYAxis.length;
 
-      const _yAxis = [];
+      const _yAxis: number[] = [];
       const _xAxis = new Float64Array(pointsLength);
       const unsortIds = new Float64Array(pointsLength);
 
@@ -223,7 +223,7 @@ class MarkerCluster<T> {
         [y: number, x: number, count: number, index: number]
       >();
 
-      for (let i = 0; i < pointsLength; i++) {
+      const fn1 = (i: number) => {
         const y = prevYAxis[i];
         const x = prevXAxis[i];
 
@@ -231,69 +231,89 @@ class MarkerCluster<T> {
           startIndex++;
         }
 
-        let clustered = false;
+        const fn1 = (j: number) => {
+          const _x = _xAxis[j];
 
-        for (let j = startIndex; j < _yAxis.length; j++) {
-          const kek = _xAxis[j];
-          if (x >= kek - r && x <= kek + r) {
-            const bek = _yAxis[j];
-            if (clusters.has(bek)) {
-              const v = clusters.get(bek)!;
+          if (x >= _x - r && x <= _x + r) {
+            const _y = _yAxis[j];
+
+            if (clusters.has(_y)) {
+              const v = clusters.get(_y)!;
               v[0] += y;
               v[1] += x;
               v[2]++;
             } else {
-              clusters.set(bek, [y + _yAxis[j], x + kek, 2, j]);
+              clusters.set(_y, [y + _y, x + _x, 2, j]);
             }
 
-            clustered = true;
-
-            break;
+            return true;
           }
+
+          return false;
+        };
+
+        const l = _yAxis.length;
+
+        for (var j = startIndex; j < l; j++) {
+          if (fn1(j)) break;
         }
 
-        if (!clustered) {
+        if (j == l) {
           const endIndex = _yAxis.push(y);
           _xAxis[endIndex] = x;
           unsortIds[endIndex] = prevIds[i];
         }
+      };
+
+      for (let i = 0; i < pointsLength; i++) {
+        fn1(i);
       }
 
-      const yAxis = new Float64Array(_yAxis);
+      if (clusters.size) {
+        const yAxis = new Float64Array(_yAxis);
 
-      const iterator = clusters.values();
+        const iterator = clusters.values();
 
-      for (let i = clusters.size; i--; ) {
-        const v: [y: number, x: number, count: number, index: number] =
-          iterator.next().value;
+        const fn1 = () => {
+          const v: [y: number, x: number, count: number, index: number] =
+            iterator.next().value;
 
-        const count = v[2];
+          const count = v[2];
 
-        let y = v[0] / count;
+          let y = v[0] / count;
 
-        if (map.get(y)) {
-          y += Number.EPSILON;
+          if (map.get(y)) {
+            y += Number.EPSILON;
+          }
+
+          map.set(y, [v[1] / count, -count]);
+
+          yAxis[v[3]] = y;
+        };
+
+        for (let i = clusters.size; i--; ) {
+          fn1();
         }
 
-        map.set(y, [v[1] / count, -count]);
+        yAxis.sort();
 
-        yAxis[v[3]] = y;
+        const l = yAxis.length;
+
+        const xAxis = new Float64Array(l);
+        const ids = new Int32Array(l);
+
+        const fn2 = (i: number) => {
+          const v = map.get(yAxis[i])!;
+          xAxis[i] = v[0];
+          ids[i] = v[1];
+        };
+
+        for (let i = l; i--; ) {
+          fn2(i);
+        }
+
+        data.push(yAxis, xAxis, ids);
       }
-
-      yAxis.sort();
-
-      const ll = yAxis.length;
-
-      const xAxis = new Float64Array(ll);
-      const ids = new Int32Array(ll);
-
-      for (let i = ll; i--; ) {
-        const v = map.get(yAxis[i])!;
-        xAxis[i] = v[0];
-        ids[i] = v[1];
-      }
-
-      data.push(yAxis, xAxis, ids);
     };
 
     for (let z = maxZoom; z > minZoom; z--) {
