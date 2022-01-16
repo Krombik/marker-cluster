@@ -9,6 +9,8 @@ import {
   boundedLngToX,
   latToY,
   lngToX,
+  yToLat,
+  xToLng,
 } from "./utils";
 
 type Coords = [lat: number, lng: number];
@@ -90,8 +92,11 @@ class MarkerCluster<T> {
   private _options: Required<ClustererOptions<T>>;
   private _store = new Map<
     number,
-    { map: ClusterMap<T>; arrY: Float64Array }
+    [yAxis: Float64Array, xAxis: Float64Array, ids: Int32Array]
   >();
+
+  points: T[];
+  _clusters: Int32Array;
 
   constructor(options: ClustererOptions<T>) {
     this._options = {
@@ -174,7 +179,7 @@ class MarkerCluster<T> {
 
       let y = latToY(coords[0]);
 
-      if (map.has(y)) {
+      while (map.has(y)) {
         y += Number.EPSILON;
       }
 
@@ -200,7 +205,13 @@ class MarkerCluster<T> {
       f2(i);
     }
 
-    const data = [yAxis, xAxis, ids];
+    const data: [yAxis: Float64Array, xAxis: Float64Array, ids: Int32Array] = [
+      yAxis,
+      xAxis,
+      ids,
+    ];
+
+    const clusters: number[] = [];
 
     const fn3 = (z: number) => {
       const r = pixelsToDistance(radius, extent, z);
@@ -213,15 +224,13 @@ class MarkerCluster<T> {
       const pointsLength = prevYAxis.length;
 
       const _yAxis: number[] = [];
-      const _xAxis = new Float64Array(pointsLength);
-      const unsortIds = new Float64Array(pointsLength);
+      const _xAxis: number[] = [];
 
       let startIndex = 0;
 
-      const clusters = new Map<
-        number,
-        [y: number, x: number, count: number, index: number]
-      >();
+      type Kek = [index: number, y: number, x: number, items: number[]];
+
+      const clustersMap = new Map<number, Kek>();
 
       const fn1 = (i: number) => {
         const y = prevYAxis[i];
@@ -237,13 +246,15 @@ class MarkerCluster<T> {
           if (x >= _x - r && x <= _x + r) {
             const _y = _yAxis[j];
 
-            if (clusters.has(_y)) {
-              const v = clusters.get(_y)!;
-              v[0] += y;
-              v[1] += x;
-              v[2]++;
+            const id = prevIds[i];
+
+            if (clustersMap.has(_y)) {
+              const v = clustersMap.get(_y)!;
+              v[1] += y;
+              v[2] += x;
+              v[3].push(id);
             } else {
-              clusters.set(_y, [y + _y, x + _x, 2, j]);
+              clustersMap.set(_y, [j, _y + y, _x + x, [map.get(_y)![1], id]]);
             }
 
             return true;
@@ -252,16 +263,19 @@ class MarkerCluster<T> {
           return false;
         };
 
-        const l = _yAxis.length;
+        const fn = () => {
+          const l = _yAxis.length;
 
-        for (var j = startIndex; j < l; j++) {
-          if (fn1(j)) break;
-        }
+          for (let j = startIndex; j < l; j++) {
+            if (fn1(j)) return false;
+          }
 
-        if (j == l) {
-          const endIndex = _yAxis.push(y);
-          _xAxis[endIndex] = x;
-          unsortIds[endIndex] = prevIds[i];
+          return true;
+        };
+
+        if (fn()) {
+          _yAxis.push(y);
+          _xAxis.push(x);
         }
       };
 
@@ -269,29 +283,39 @@ class MarkerCluster<T> {
         fn1(i);
       }
 
-      if (clusters.size) {
+      if (clustersMap.size) {
         const yAxis = new Float64Array(_yAxis);
 
-        const iterator = clusters.values();
+        const iterator = clustersMap.values();
 
         const fn1 = () => {
-          const v: [y: number, x: number, count: number, index: number] =
-            iterator.next().value;
+          const v: Kek = iterator.next().value;
 
-          const count = v[2];
+          const items = v[3];
 
-          let y = v[0] / count;
+          const count = items.length;
 
-          if (map.get(y)) {
+          let y = v[1] / count;
+
+          while (map.get(y)) {
             y += Number.EPSILON;
           }
 
-          map.set(y, [v[1] / count, -count]);
+          map.set(y, [v[2] / count, -clusters.push(count)]);
 
-          yAxis[v[3]] = y;
+          let allCount = 0;
+
+          for (let i = count; i--; ) {
+            const id = items[i];
+            allCount += id < 0 ? clusters[-id] : 1;
+          }
+
+          clusters.push(allCount, ...items);
+
+          yAxis[v[0]] = y;
         };
 
-        for (let i = clusters.size; i--; ) {
+        for (let i = clustersMap.size; i--; ) {
           fn1();
         }
 
@@ -313,16 +337,37 @@ class MarkerCluster<T> {
         }
 
         data.push(yAxis, xAxis, ids);
+      } else {
+        data.push(prevYAxis, prevXAxis, prevIds);
       }
     };
 
-    for (let z = maxZoom; z > minZoom; z--) {
+    for (let z = maxZoom; z >= minZoom; z--) {
       fn3(z);
     }
 
-    console.log(performance.now() - t1);
+    const store = new Map<
+      number,
+      [yAxis: Float64Array, xAxis: Float64Array, ids: Int32Array]
+    >();
 
-    console.log(data);
+    const diff = maxZoom + 1 - minZoom;
+
+    for (let i = 0; i < data.length; i += 3) {
+      store.set(diff - i / 3, [
+        data[i] as Float64Array,
+        data[i + 1] as Float64Array,
+        data[i + 2] as Int32Array,
+      ]);
+    }
+
+    this.points = points;
+
+    this._store = store;
+
+    this._clusters = new Int32Array(clusters);
+
+    console.log(performance.now() - t1);
 
     // this._store = getStore(
     //   map,
@@ -415,29 +460,35 @@ class MarkerCluster<T> {
   ) {
     const { minZoom, maxZoom } = this._options;
 
-    const { map, arrY } = this._store.get(clamp(minZoom, zoom, maxZoom + 1))!;
+    const [yAxis, xAxis, ids] = this._store.get(
+      clamp(minZoom, zoom, maxZoom + 1)
+    )!;
+
+    const points = this.points;
+
+    const clusters = this._clusters;
 
     let start = 0;
-    let end = arrY.length - 1;
+    let end = yAxis.length - 1;
 
-    while (arrY[start] < minY) {
+    while (yAxis[start] < minY) {
       const middle = Math.floor((start + end) / 2);
 
-      if (minY < arrY[middle]) {
+      if (minY < yAxis[middle]) {
         end = middle - 1;
       } else {
         start = middle + 1;
       }
     }
 
-    end = arrY.length - 1;
+    end = yAxis.length - 1;
 
     const first = start;
 
-    while (arrY[end] > maxY) {
+    while (yAxis[end] > maxY) {
       const middle = Math.floor((start + end) / 2);
 
-      if (maxY < arrY[middle]) {
+      if (maxY < yAxis[middle]) {
         end = middle - 1;
       } else {
         start = middle + 1;
@@ -447,12 +498,24 @@ class MarkerCluster<T> {
     end++;
 
     for (let i = first; i < end; i++) {
-      const aX = map.get(arrY[i])!;
-      for (let j = 0; j < aX.length; j += 2) {
-        const curr = aX[j];
-        if (curr > minX && curr < maxX) {
-          mutate(aX[j + 1] as Point<T>);
-        }
+      const x = xAxis[i];
+      if (x >= minX && x <= maxX) {
+        const id = ids[i];
+        mutate(
+          id < 0
+            ? {
+                items: [],
+                count: clusters[-id],
+                key: id,
+                zoom: 0,
+                coords: [yToLat(yAxis[i]), xToLng(x)],
+              }
+            : {
+                marker: points[id],
+                key: id,
+                coords: [yToLat(yAxis[i]), xToLng(x)],
+              }
+        );
       }
     }
   }
