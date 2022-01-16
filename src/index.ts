@@ -155,20 +155,163 @@ class MarkerCluster<T> {
   load(points: T[]) {
     const { minZoom, maxZoom, extent, radius } = this._options;
 
-    const map: ClusterMap<T> = new Map();
+    const t1 = performance.now();
 
-    const arr: number[] = [];
+    const map = new Map<number, [x: number, index: number]>();
 
-    this._initCluster(arr, map, points);
+    const pointsLength = points.length;
 
-    this._store = getStore(
-      map,
-      new Float64Array(arr).sort().buffer,
-      minZoom,
-      maxZoom,
-      radius,
-      extent
-    );
+    const yAxis = new Float64Array(pointsLength);
+    const xAxis = new Float64Array(pointsLength);
+    const ids = new Int32Array(pointsLength);
+
+    // this._initCluster(arr, map, points);
+
+    const { getLatLng } = this._options;
+
+    const f1 = (i: number) => {
+      const coords = getLatLng(points[i]);
+
+      let y = latToY(coords[0]);
+
+      if (map.has(y)) {
+        y += Number.EPSILON;
+      }
+
+      map.set(y, [lngToX(coords[1]), i]);
+      yAxis[i] = y;
+    };
+
+    for (let i = pointsLength; i--; ) {
+      f1(i);
+    }
+
+    yAxis.sort();
+
+    const f2 = (i: number) => {
+      const id = map.get(yAxis[i])!;
+
+      xAxis[i] = id[0];
+
+      ids[i] = id[1];
+    };
+
+    for (let i = pointsLength; i--; ) {
+      f2(i);
+    }
+
+    const data = [yAxis, xAxis, ids];
+
+    const fn3 = (z: number) => {
+      const r = pixelsToDistance(radius, extent, z);
+      const r2 = r * 2;
+      const l = data.length - 1;
+      const prevIds = data[l];
+      const prevXAxis = data[l - 1];
+      const prevYAxis = data[l - 2];
+
+      const pointsLength = prevYAxis.length;
+
+      const _yAxis = [];
+      const _xAxis = new Float64Array(pointsLength);
+      const unsortIds = new Float64Array(pointsLength);
+
+      let startIndex = 0;
+
+      const clusters = new Map<
+        number,
+        [y: number, x: number, count: number, index: number]
+      >();
+
+      for (let i = 0; i < pointsLength; i++) {
+        const y = prevYAxis[i];
+        const x = prevXAxis[i];
+
+        while (y > _yAxis[startIndex] + r2) {
+          startIndex++;
+        }
+
+        let clustered = false;
+
+        for (let j = startIndex; j < _yAxis.length; j++) {
+          const kek = _xAxis[j];
+          if (x >= kek - r && x <= kek + r) {
+            const bek = _yAxis[j];
+            if (clusters.has(bek)) {
+              const v = clusters.get(bek)!;
+              v[0] += y;
+              v[1] += x;
+              v[2]++;
+            } else {
+              clusters.set(bek, [y + _yAxis[j], x + kek, 2, j]);
+            }
+
+            clustered = true;
+
+            break;
+          }
+        }
+
+        if (!clustered) {
+          const endIndex = _yAxis.push(y);
+          _xAxis[endIndex] = x;
+          unsortIds[endIndex] = prevIds[i];
+        }
+      }
+
+      const yAxis = new Float64Array(_yAxis);
+
+      const iterator = clusters.values();
+
+      for (let i = clusters.size; i--; ) {
+        const v: [y: number, x: number, count: number, index: number] =
+          iterator.next().value;
+
+        const count = v[2];
+
+        let y = v[0] / count;
+
+        if (map.get(y)) {
+          y += Number.EPSILON;
+        }
+
+        map.set(y, [v[1] / count, -count]);
+
+        yAxis[v[3]] = y;
+      }
+
+      yAxis.sort();
+
+      const ll = yAxis.length;
+
+      const xAxis = new Float64Array(ll);
+      const ids = new Int32Array(ll);
+
+      for (let i = ll; i--; ) {
+        const v = map.get(yAxis[i])!;
+        xAxis[i] = v[0];
+        ids[i] = v[1];
+      }
+
+      data.push(yAxis, xAxis, ids);
+    };
+
+    for (let z = maxZoom; z > minZoom; z--) {
+      fn3(z);
+    }
+
+    console.log(performance.now() - t1);
+
+    console.log(data);
+
+    // this._store = getStore(
+    //   map,
+    //   new Float64Array(arr).sort().buffer,
+    //   minZoom,
+    //   maxZoom,
+    //   radius,
+    //   extent
+    // );
   }
 
   getPoints = ((
