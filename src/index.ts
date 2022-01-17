@@ -1,4 +1,4 @@
-import { ClusterMap, XOR } from "./types";
+import { ClusterMap, PointsData, XOR } from "./types";
 import {
   getStore,
   clamp,
@@ -90,10 +90,7 @@ type GetPoints<T> = {
 
 class MarkerCluster<T> {
   private _options: Required<ClustererOptions<T>>;
-  private _store = new Map<
-    number,
-    [yAxis: Float64Array, xAxis: Float64Array, ids: Int32Array]
-  >();
+  private _store = new Map<number, PointsData>();
 
   points: T[];
   _clusters: Int32Array;
@@ -205,11 +202,7 @@ class MarkerCluster<T> {
       f2(i);
     }
 
-    const data: [yAxis: Float64Array, xAxis: Float64Array, ids: Int32Array] = [
-      yAxis,
-      xAxis,
-      ids,
-    ];
+    const data: PointsData = [yAxis, xAxis, ids];
 
     const clusters: number[] = [];
 
@@ -346,10 +339,7 @@ class MarkerCluster<T> {
       fn3(z);
     }
 
-    const store = new Map<
-      number,
-      [yAxis: Float64Array, xAxis: Float64Array, ids: Int32Array]
-    >();
+    const store = new Map<number, PointsData>();
 
     const diff = maxZoom + 1 - minZoom;
 
@@ -379,31 +369,40 @@ class MarkerCluster<T> {
     // );
   }
 
-  getPoints = ((
+  getPoints<M, C>(
     zoom: number,
     westLng: number,
     southLat: number,
     eastLng: number,
     northLat: number,
-    arg1: (<M>(marker: Marker<T>) => M) | number | undefined,
-    arg2,
-    arg3
-  ) => {
-    const points: ReturnType<GetPoints<T>> = [];
+    getMarker: (point: T, key: number, lat: number, lng: number) => M,
+    getCluster: (count: number, id: number, lat: number, lng: number) => C,
+    expand?: number
+  ) {
+    const t1 = performance.now();
+    const value: (M | C)[] = [];
 
-    let mutate: (p: Point<T>) => any;
+    const { minZoom, maxZoom } = this._options;
 
-    let expand: number;
+    const [yAxis, xAxis, ids] = this._store.get(
+      clamp(minZoom, zoom, maxZoom + 1)
+    )!;
 
-    if (typeof arg1 == "function") {
-      mutate = (p) => points.push(p.items ? arg2(p) : arg1(p));
+    const clusters = this._clusters;
 
-      expand = arg3 || 0;
-    } else {
-      mutate = points.push;
+    const points = this.points;
 
-      expand = arg1 || 0;
-    }
+    const mutate = (index: number) => {
+      const y = yAxis[index];
+      const x = xAxis[index];
+      const id = ids[index];
+
+      value.push(
+        id < 0
+          ? getCluster(clusters[-id], -id, yToLat(y), xToLng(x))
+          : getMarker(points[id], y, yToLat(y), xToLng(x))
+      );
+    };
 
     let minY = boundedLatToY(northLat);
     let maxY = boundedLatToY(southLat);
@@ -435,39 +434,30 @@ class MarkerCluster<T> {
       }
 
       if (minX > maxX) {
-        this._mutatePoints(mutate, 0, minY, maxX, maxY, zoom);
-        this._mutatePoints(mutate, minX, minY, 1, maxY, zoom);
+        this._mutatePoints(mutate, yAxis, xAxis, 0, minY, maxX, maxY);
+        this._mutatePoints(mutate, yAxis, xAxis, minX, minY, 1, maxY);
 
-        return points;
+        return value;
       }
     } else {
       minX = 0;
       maxX = 1;
     }
 
-    this._mutatePoints(mutate, minX, minY, maxX, maxY, zoom);
-
-    return points;
-  }) as GetPoints<T>;
+    this._mutatePoints(mutate, yAxis, xAxis, minX, minY, maxX, maxY);
+    console.log(performance.now() - t1);
+    return value;
+  }
 
   private _mutatePoints(
-    mutate: (p: Point<T>) => any,
+    mutate: (index: number) => void,
+    yAxis: Float64Array,
+    xAxis: Float64Array,
     minX: number,
     minY: number,
     maxX: number,
-    maxY: number,
-    zoom: number
+    maxY: number
   ) {
-    const { minZoom, maxZoom } = this._options;
-
-    const [yAxis, xAxis, ids] = this._store.get(
-      clamp(minZoom, zoom, maxZoom + 1)
-    )!;
-
-    const points = this.points;
-
-    const clusters = this._clusters;
-
     let start = 0;
     let end = yAxis.length - 1;
 
@@ -499,23 +489,9 @@ class MarkerCluster<T> {
 
     for (let i = first; i < end; i++) {
       const x = xAxis[i];
+
       if (x >= minX && x <= maxX) {
-        const id = ids[i];
-        mutate(
-          id < 0
-            ? {
-                items: [],
-                count: clusters[-id],
-                key: id,
-                zoom: 0,
-                coords: [yToLat(yAxis[i]), xToLng(x)],
-              }
-            : {
-                marker: points[id],
-                key: id,
-                coords: [yToLat(yAxis[i]), xToLng(x)],
-              }
-        );
+        mutate(i);
       }
     }
   }
