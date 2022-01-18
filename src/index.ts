@@ -159,15 +159,13 @@ class MarkerCluster<T> {
 
     const t1 = performance.now();
 
-    const map = new Map<number, [x: number, index: number]>();
+    const map = new Map<number, [index: number, x: number]>();
 
     const pointsLength = points.length;
 
     const yAxis = new Float64Array(pointsLength);
     const xAxis = new Float64Array(pointsLength);
     const ids = new Int32Array(pointsLength);
-
-    // this._initCluster(arr, map, points);
 
     const { getLatLng } = this._options;
 
@@ -180,7 +178,7 @@ class MarkerCluster<T> {
         y += Number.EPSILON;
       }
 
-      map.set(y, [lngToX(coords[1]), i]);
+      map.set(y, [i, lngToX(coords[1])]);
       yAxis[i] = y;
     };
 
@@ -191,11 +189,11 @@ class MarkerCluster<T> {
     yAxis.sort();
 
     const f2 = (i: number) => {
-      const id = map.get(yAxis[i])!;
+      const v = map.get(yAxis[i])!;
 
-      xAxis[i] = id[0];
+      ids[i] = v[0];
 
-      ids[i] = id[1];
+      xAxis[i] = v[1];
     };
 
     for (let i = pointsLength; i--; ) {
@@ -209,7 +207,9 @@ class MarkerCluster<T> {
     const fn3 = (z: number) => {
       const r = pixelsToDistance(radius, extent, z);
       const r2 = r * 2;
+
       const l = data.length - 1;
+
       const prevIds = data[l];
       const prevXAxis = data[l - 1];
       const prevYAxis = data[l - 2];
@@ -221,9 +221,14 @@ class MarkerCluster<T> {
 
       let startIndex = 0;
 
-      type Kek = [index: number, y: number, x: number, items: number[]];
+      type ClusterTuple = [
+        y: number,
+        x: number,
+        items: number[],
+        index: number
+      ];
 
-      const clustersMap = new Map<number, Kek>();
+      const clustersMap = new Map<number, ClusterTuple>();
 
       const fn1 = (i: number) => {
         const y = prevYAxis[i];
@@ -243,11 +248,12 @@ class MarkerCluster<T> {
 
             if (clustersMap.has(_y)) {
               const v = clustersMap.get(_y)!;
-              v[1] += y;
-              v[2] += x;
-              v[3].push(id);
+
+              v[0] += y;
+              v[1] += x;
+              v[2].push(id);
             } else {
-              clustersMap.set(_y, [j, _y + y, _x + x, [map.get(_y)![1], id]]);
+              clustersMap.set(_y, [_y + y, _x + x, [map.get(_y)![0], id], j]);
             }
 
             return true;
@@ -256,7 +262,7 @@ class MarkerCluster<T> {
           return false;
         };
 
-        const fn = () => {
+        const fn2 = () => {
           const l = _yAxis.length;
 
           for (let j = startIndex; j < l; j++) {
@@ -266,7 +272,7 @@ class MarkerCluster<T> {
           return true;
         };
 
-        if (fn()) {
+        if (fn2()) {
           _yAxis.push(y);
           _xAxis.push(x);
         }
@@ -282,19 +288,19 @@ class MarkerCluster<T> {
         const iterator = clustersMap.values();
 
         const fn1 = () => {
-          const v: Kek = iterator.next().value;
+          const v: ClusterTuple = iterator.next().value;
 
-          const items = v[3];
+          const items = v[2];
 
           const count = items.length;
 
-          let y = v[1] / count;
+          let y = v[0] / count;
 
-          while (map.get(y)) {
+          while (map.has(y)) {
             y += Number.EPSILON;
           }
 
-          map.set(y, [v[2] / count, -clusters.push(count)]);
+          map.set(y, [-clusters.push(count), v[1] / count]);
 
           let allCount = 0;
 
@@ -305,7 +311,7 @@ class MarkerCluster<T> {
 
           clusters.push(allCount, ...items);
 
-          yAxis[v[0]] = y;
+          yAxis[v[3]] = y;
         };
 
         for (let i = clustersMap.size; i--; ) {
@@ -321,8 +327,10 @@ class MarkerCluster<T> {
 
         const fn2 = (i: number) => {
           const v = map.get(yAxis[i])!;
-          xAxis[i] = v[0];
-          ids[i] = v[1];
+
+          ids[i] = v[0];
+
+          xAxis[i] = v[1];
         };
 
         for (let i = l; i--; ) {
@@ -399,7 +407,7 @@ class MarkerCluster<T> {
 
       value.push(
         id < 0
-          ? getCluster(clusters[-id], -id, yToLat(y), xToLng(x))
+          ? getCluster(clusters[-id], id, yToLat(y), xToLng(x))
           : getMarker(points[id], y, yToLat(y), xToLng(x))
       );
     };
@@ -461,7 +469,7 @@ class MarkerCluster<T> {
     let start = 0;
     let end = yAxis.length - 1;
 
-    while (yAxis[start] < minY) {
+    const fn1 = () => {
       const middle = Math.floor((start + end) / 2);
 
       if (minY < yAxis[middle]) {
@@ -469,13 +477,17 @@ class MarkerCluster<T> {
       } else {
         start = middle + 1;
       }
+    };
+
+    while (yAxis[start] < minY) {
+      fn1();
     }
 
     end = yAxis.length - 1;
 
     const first = start;
 
-    while (yAxis[end] > maxY) {
+    const fn2 = () => {
       const middle = Math.floor((start + end) / 2);
 
       if (maxY < yAxis[middle]) {
@@ -483,16 +495,24 @@ class MarkerCluster<T> {
       } else {
         start = middle + 1;
       }
+    };
+
+    while (yAxis[end] > maxY) {
+      fn2();
     }
 
     end++;
 
-    for (let i = first; i < end; i++) {
+    const fn = (i: number) => {
       const x = xAxis[i];
 
       if (x >= minX && x <= maxX) {
         mutate(i);
       }
+    };
+
+    for (let i = first; i < end; i++) {
+      fn(i);
     }
   }
 }
