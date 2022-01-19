@@ -27,6 +27,8 @@ export type Cluster<T> = {
 
 export type Point<T> = XOR<[Cluster<T>, Marker<T>]>;
 
+type Keksaw<T> = (T | Keksaw<T>)[];
+
 export type ClustererOptions<T> = {
   /**
    * Min zoom level to cluster the points on
@@ -94,6 +96,9 @@ class MarkerCluster<T> {
 
   points: T[];
   _clusters: Int32Array;
+
+  zoomSplitter: Int8Array;
+  clusterEndIndexes: Int32Array;
 
   constructor(options: ClustererOptions<T>) {
     this._options = {
@@ -202,7 +207,11 @@ class MarkerCluster<T> {
 
     const data: PointsData = [yAxis, xAxis, ids];
 
+    const zoomSplitter: number[] = [];
+
     const clusters: number[] = [];
+
+    const clusterEndIndexes: number[] = [];
 
     const fn3 = (z: number) => {
       const r = pixelsToDistance(radius, extent, z);
@@ -306,6 +315,7 @@ class MarkerCluster<T> {
 
           for (let i = count; i--; ) {
             const id = items[i];
+
             allCount += id < 0 ? clusters[-id] : 1;
           }
 
@@ -338,8 +348,8 @@ class MarkerCluster<T> {
         }
 
         data.push(yAxis, xAxis, ids);
-      } else {
-        data.push(prevYAxis, prevXAxis, prevIds);
+        zoomSplitter.push(z);
+        clusterEndIndexes.push(clusters.length);
       }
     };
 
@@ -349,15 +359,27 @@ class MarkerCluster<T> {
 
     const store = new Map<number, PointsData>();
 
-    const diff = maxZoom + 1 - minZoom;
+    const _t = [maxZoom + 1, ...zoomSplitter, minZoom - 1];
 
-    for (let i = 0; i < data.length; i += 3) {
-      store.set(diff - i / 3, [
-        data[i] as Float64Array,
-        data[i + 1] as Float64Array,
-        data[i + 2] as Int32Array,
-      ]);
+    for (let i = 0; i < _t.length - 1; i++) {
+      const index = i * 3;
+
+      const v: PointsData = [
+        data[index] as Float64Array,
+        data[index + 1] as Float64Array,
+        data[index + 2] as Int32Array,
+      ];
+
+      const next = _t[i + 1];
+
+      for (let j = _t[i]; j > next; j--) {
+        store.set(j, v);
+      }
     }
+
+    this.clusterEndIndexes = new Int32Array(clusterEndIndexes);
+
+    this.zoomSplitter = new Int8Array(zoomSplitter);
 
     this.points = points;
 
@@ -377,17 +399,70 @@ class MarkerCluster<T> {
     // );
   }
 
+  getZoom(clusterId: number) {
+    clusterId = -clusterId;
+
+    const clusterEndIndexes = this.clusterEndIndexes;
+
+    for (let i = clusterEndIndexes.length; i--; ) {
+      if (clusterEndIndexes[i] < clusterId) return this.zoomSplitter[i];
+    }
+
+    return -1;
+  }
+
+  getChildren(clusterId: number) {
+    return this._mapChildrenIds(this._getChildrenIds(clusterId));
+  }
+
+  private _mapChildrenIds(items: number[]): Keksaw<T> {
+    const acc: Keksaw<T> = [];
+
+    const points = this.points;
+
+    const f1 = (i: number) => {
+      const id = items[i];
+
+      if (id < 0) {
+        acc.push(this._mapChildrenIds(this._getChildrenIds(id)));
+      } else {
+        acc.push(points[id]);
+      }
+    };
+
+    for (let i = items.length; i--; ) {
+      f1(i);
+    }
+
+    return acc;
+  }
+
+  private _getChildrenIds(clusterId: number) {
+    clusterId = -clusterId;
+
+    const arr: number[] = [];
+
+    const clusters = this._clusters;
+
+    const l = clusterId + clusters[clusterId - 1] + 1;
+
+    for (let j = clusterId + 1; j < l; j++) {
+      arr.push(clusters[j]);
+    }
+
+    return arr;
+  }
+
   getPoints<M, C>(
     zoom: number,
     westLng: number,
     southLat: number,
     eastLng: number,
     northLat: number,
-    getMarker: (point: T, key: number, lat: number, lng: number) => M,
+    getMarker: (point: T, lat: number, lng: number) => M,
     getCluster: (count: number, id: number, lat: number, lng: number) => C,
     expand?: number
   ) {
-    const t1 = performance.now();
     const value: (M | C)[] = [];
 
     const { minZoom, maxZoom } = this._options;
@@ -408,7 +483,7 @@ class MarkerCluster<T> {
       value.push(
         id < 0
           ? getCluster(clusters[-id], id, yToLat(y), xToLng(x))
-          : getMarker(points[id], y, yToLat(y), xToLng(x))
+          : getMarker(points[id], yToLat(y), xToLng(x))
       );
     };
 
@@ -453,7 +528,7 @@ class MarkerCluster<T> {
     }
 
     this._mutatePoints(mutate, yAxis, xAxis, minX, minY, maxX, maxY);
-    console.log(performance.now() - t1);
+
     return value;
   }
 
