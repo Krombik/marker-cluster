@@ -1,4 +1,4 @@
-import { Bool, ClusterMap, ClusterStore, Point, XAxis } from "./types";
+import { Data, PointsData } from "./types";
 
 export const clamp = (min: number, value: number, max: number) =>
   Math.min(Math.max(value, min), max);
@@ -33,174 +33,203 @@ export const pixelsToDistance = (
   zoom: number
 ) => pixels / (extent * Math.pow(2, zoom));
 
-type Queue<T> = [
-  yMax: number,
-  xMin: number,
-  xMax: number,
-  items: [y: number, x: number, p: Point<T>]
-];
-
-export const addDot = <T>(
-  map: ClusterMap<T>,
-  arr: number[],
-  y: number,
-  x: number,
-  p: Point<T>
-) => {
-  if (map.has(y)) {
-    map.get(y)!.push(x, p);
-  } else {
-    map.set(y, [x, p]);
-    arr.push(y);
-  }
-};
-
-const addDots = <T>(
-  data: Queue<T>[3],
-  map: any,
-  arr: number[],
-  zoom: number
-) => {
-  if (data.length > 3) {
-    const yx = data.splice(0, 2) as [y: number, x: number];
-
-    const l = data.length;
-
-    const y = yx[0] / l;
-    const x = yx[1] / l;
-
-    let count = 0;
-
-    for (let i = data.length; i--; ) {
-      count += (data[i] as Point<T>).count || 1;
-    }
-
-    addDot(map, arr, y, x, {
-      items: data as Point<T>[],
-      coords: [yToLat(y), xToLng(x)],
-      key: pair(x, y),
-      count,
-      zoom,
-    });
-  } else {
-    addDot(map, arr, data[0], data[1], data[2]);
-  }
-};
-
-const clusteringQueue = <T>(
-  queue: Queue<T>,
-  startMinXIndex: number,
-  y: number,
-  x: number,
-  p: Point<T>,
-  r: number
-): Bool => {
-  for (let j = startMinXIndex; j < queue.length; j += 4) {
-    if (x >= queue[j] && x <= queue[j + 1]) {
-      const items = queue[j + 2] as Queue<T>[3];
-
-      items[0] += y;
-      items[1] += x;
-      items.push(p);
-
-      return 1;
-    }
-  }
-
-  queue.push(y + 2 * r, x - r, x + r, [y, x, p]);
-
-  return 0;
-};
-
-type QueueIndexRef = [index: number];
-
-const mutateQueue = <T>(
-  queue: Queue<T>,
-  data: QueueIndexRef,
-  y: number,
-  arrX: XAxis<T>,
-  r: number
-): Bool => {
-  let i = data[0];
-
-  while (y > queue[i]) {
-    i += 4;
-  }
-
-  data[0] = i;
-
-  let clustered: Bool = 0;
-
-  const startMinXIndex = i + 1;
-
-  for (let j = 0; j < arrX.length; j += 2) {
-    clustered |= clusteringQueue(
-      queue,
-      startMinXIndex,
-      y,
-      arrX[j] as number,
-      arrX[j + 1] as Point<T>,
-      r
-    );
-  }
-
-  return clustered as Bool;
-};
-
-export const getStore = <T>(
-  map: ClusterMap<T>,
-  arr: ArrayBufferLike,
+export const getData = (
+  yOrigin: Float64Array,
+  xOrigin: Float64Array,
   minZoom: number,
   maxZoom: number,
   radius: number,
   extent: number
-) => {
-  const store: ClusterStore<T> = new Map();
-  store.set(maxZoom + 1, { map, arrY: new Float64Array(arr) });
+): Data => {
+  const map = new Map<number, [index: number, x: number]>();
 
-  const fn = (z: number) => {
-    const t1 = performance.now();
-    const r = pixelsToDistance(radius, extent, z);
+  const pointsLength = yOrigin.length;
 
-    const tree = store.get(z + 1)!;
+  const yAxis = new Float64Array(pointsLength);
+  const xAxis = new Float64Array(pointsLength);
+  const ids = new Int32Array(pointsLength);
 
-    const { map, arrY } = tree;
+  const f1 = (i: number) => {
+    let y = yOrigin[i];
 
-    const l = arrY.length;
-
-    const queue: Queue<T> = [] as any;
-
-    const queueIndexRef: QueueIndexRef = [0];
-
-    let clustered: Bool = 0;
-    for (let i = 0; i < l; i++) {
-      const y = arrY[i];
-
-      clustered |= mutateQueue(queue, queueIndexRef, y, map.get(y)!, r);
+    while (map.has(y)) {
+      y += Number.EPSILON;
     }
-    if (clustered) {
-      const map: ClusterMap<T> = new Map();
-      const arr: number[] = [];
 
-      const l = queue.length;
+    map.set(y, [i, xOrigin[i]]);
 
-      for (let i = 3; i < l; i += 4) {
-        addDots(queue[i] as Queue<T>[3], map, arr, z);
+    yAxis[i] = y;
+  };
+
+  for (let i = pointsLength; i--; ) {
+    f1(i);
+  }
+
+  yAxis.sort();
+
+  const f2 = (i: number) => {
+    const v = map.get(yAxis[i])!;
+
+    ids[i] = v[0];
+
+    xAxis[i] = v[1];
+  };
+
+  for (let i = pointsLength; i--; ) {
+    f2(i);
+  }
+
+  const data: PointsData = [yAxis, xAxis, ids];
+
+  const zoomSplitter: number[] = [];
+
+  const clusters: number[] = [];
+
+  const clusterEndIndexes: number[] = [];
+
+  const fn3 = (z: number) => {
+    const r = pixelsToDistance(radius, extent, z);
+    const r2 = r * 2;
+
+    const l = data.length - 1;
+
+    const prevIds = data[l];
+    const prevXAxis = data[l - 1];
+    const prevYAxis = data[l - 2];
+
+    const pointsLength = prevYAxis.length;
+
+    const _yAxis: number[] = [];
+    const _xAxis: number[] = [];
+
+    let startIndex = 0;
+
+    type ClusterTuple = [y: number, x: number, items: number[], index: number];
+
+    const clustersMap = new Map<number, ClusterTuple>();
+
+    const fn1 = (i: number) => {
+      const y = prevYAxis[i];
+      const x = prevXAxis[i];
+
+      while (y > _yAxis[startIndex] + r2) {
+        startIndex++;
       }
 
-      store.set(z, {
-        map,
-        arrY: new Float64Array(arr).sort(),
-      });
-    } else {
-      store.set(z, tree);
+      const fn1 = (j: number) => {
+        const _x = _xAxis[j];
+
+        if (x >= _x - r && x <= _x + r) {
+          const _y = _yAxis[j];
+
+          const id = prevIds[i];
+
+          if (clustersMap.has(_y)) {
+            const v = clustersMap.get(_y)!;
+
+            v[0] += y;
+            v[1] += x;
+            v[2].push(id);
+          } else {
+            clustersMap.set(_y, [_y + y, _x + x, [map.get(_y)![0], id], j]);
+          }
+
+          return true;
+        }
+
+        return false;
+      };
+
+      const fn2 = () => {
+        const l = _yAxis.length;
+
+        for (let j = startIndex; j < l; j++) {
+          if (fn1(j)) return false;
+        }
+
+        return true;
+      };
+
+      if (fn2()) {
+        _yAxis.push(y);
+        _xAxis.push(x);
+      }
+    };
+
+    for (let i = 0; i < pointsLength; i++) {
+      fn1(i);
     }
-    console.log(performance.now() - t1);
+
+    if (clustersMap.size) {
+      const yAxis = new Float64Array(_yAxis);
+
+      const iterator = clustersMap.values();
+
+      const fn1 = () => {
+        const v: ClusterTuple = iterator.next().value;
+
+        const items = v[2];
+
+        const count = items.length;
+
+        let y = v[0] / count;
+
+        while (map.has(y)) {
+          y += Number.EPSILON;
+        }
+
+        map.set(y, [-clusters.push(count), v[1] / count]);
+
+        let allCount = 0;
+
+        for (let i = count; i--; ) {
+          const id = items[i];
+
+          allCount += id < 0 ? clusters[-id] : 1;
+        }
+
+        clusters.push(allCount, ...items);
+
+        yAxis[v[3]] = y;
+      };
+
+      for (let i = clustersMap.size; i--; ) {
+        fn1();
+      }
+
+      yAxis.sort();
+
+      const l = yAxis.length;
+
+      const xAxis = new Float64Array(l);
+      const ids = new Int32Array(l);
+
+      const fn2 = (i: number) => {
+        const v = map.get(yAxis[i])!;
+
+        ids[i] = v[0];
+
+        xAxis[i] = v[1];
+      };
+
+      for (let i = l; i--; ) {
+        fn2(i);
+      }
+
+      data.push(yAxis, xAxis, ids);
+      zoomSplitter.push(z);
+      clusterEndIndexes.push(clusters.length);
+    }
   };
 
   for (let z = maxZoom; z >= minZoom; z--) {
-    fn(z);
+    fn3(z);
   }
 
-  return store;
+  return [
+    data,
+    new Int8Array(zoomSplitter),
+    new Int32Array(clusters),
+    new Int32Array(clusterEndIndexes),
+  ];
 };

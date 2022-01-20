@@ -1,35 +1,19 @@
-import { ClusterMap, PointsData, XOR } from "./types";
+import { Data, NestedArray, PointsData } from "./types";
 import {
-  getStore,
   clamp,
   pixelsToDistance,
-  addDot,
-  pair,
   boundedLatToY,
   boundedLngToX,
   latToY,
   lngToX,
   yToLat,
   xToLng,
+  getData,
 } from "./utils";
 
-type Coords = [lat: number, lng: number];
+export type Coords = [lng: number, lat: number];
 
-export type Marker<T> = { marker: T; coords: Coords; key: number };
-
-export type Cluster<T> = {
-  items: Point<T>[];
-  key: number;
-  zoom: number;
-  count: number;
-  coords: Coords;
-};
-
-export type Point<T> = XOR<[Cluster<T>, Marker<T>]>;
-
-type Keksaw<T> = (T | Keksaw<T>)[];
-
-export type ClustererOptions<T> = {
+export type MarkerClusterOptions<T> = {
   /**
    * Min zoom level to cluster the points on
    * @default 0
@@ -53,54 +37,17 @@ export type ClustererOptions<T> = {
   getLatLng: (item: T) => Coords;
 };
 
-export type GetClustersArg = [
-  zoom: number,
-  westLng: number,
-  southLat: number,
-  eastLng: number,
-  northLat: number
-];
-
-type GetPoints<T> = {
-  /**
-   * @param expand
-   * @default 0
-   */
-  (
-    zoom: number,
-    westLng: number,
-    southLat: number,
-    eastLng: number,
-    northLat: number,
-    expand?: number
-  ): Point<T>[];
-  /**
-   * @param expand
-   * @default 0
-   */
-  <M, C>(
-    zoom: number,
-    westLng: number,
-    southLat: number,
-    eastLng: number,
-    northLat: number,
-    getMarker: (marker: Marker<T>) => M,
-    getCluster: (cluster: Cluster<T>) => C,
-    expand?: number
-  ): (M | C)[];
-};
-
 class MarkerCluster<T> {
-  private _options: Required<ClustererOptions<T>>;
-  private _store = new Map<number, PointsData>();
-
   points: T[];
-  _clusters: Int32Array;
 
-  zoomSplitter: Int8Array;
-  clusterEndIndexes: Int32Array;
+  private _options: Required<MarkerClusterOptions<T>>;
+  private _store = new Map<number, PointsData>();
+  private _clusters: Int32Array;
+  private _zoomSplitter: Int8Array;
+  private _clusterEndIndexes: Int32Array;
+  private _yOrigin: Float64Array;
 
-  constructor(options: ClustererOptions<T>) {
+  constructor(options: MarkerClusterOptions<T>) {
     this._options = {
       minZoom: 0,
       maxZoom: 16,
@@ -110,256 +57,85 @@ class MarkerCluster<T> {
     };
   }
 
-  private _initCluster(arrY: number[], map: ClusterMap<T>, points: T[]) {
-    const { getLatLng } = this._options;
-
-    for (let i = points.length; i--; ) {
-      const p = points[i];
-
-      const coords = getLatLng(p);
-
-      const y = latToY(coords[0]);
-      const x = lngToX(coords[1]);
-
-      addDot(map, arrY, y, x, {
-        marker: p,
-        coords,
-        key: pair(x, y),
-      });
-    }
-  }
-
   async loadAsync(points: T[], onLoad: () => void) {
     let t1 = performance.now();
+
     const worker = new Worker(new URL("./worker.js", import.meta.url), {
       type: "module",
     });
 
-    console.log(performance.now() - t1);
-
-    t1 = performance.now();
     const { minZoom, maxZoom, extent, radius } = this._options;
 
-    const map: ClusterMap<T> = new Map();
+    const [yOrigin, xOrigin] = this._getOriginAxis(points);
 
-    const arr: number[] = [];
-
-    this._initCluster(arr, map, points);
-    console.log(performance.now() - t1);
-    t1 = performance.now();
     worker.addEventListener("message", (e) => {
-      this._store = e.data;
-      console.log(performance.now() - t1);
+      this._setStore(e.data, points, yOrigin, minZoom, maxZoom);
+
       onLoad();
-      // console.log(kek);
+
+      console.log(performance.now() - t1);
     });
-    const bek = new Float64Array(arr).sort().buffer;
-    worker.postMessage({ map, arr: bek, minZoom, maxZoom, extent, radius }, [
-      bek,
-    ]);
+
+    const _yOrigin = new Float64Array(yOrigin);
+
+    worker.postMessage(
+      [_yOrigin, xOrigin, minZoom, maxZoom, radius, extent],
+      [_yOrigin.buffer, xOrigin.buffer]
+    );
   }
 
-  load(points: T[]) {
-    const { minZoom, maxZoom, extent, radius } = this._options;
-
-    const t1 = performance.now();
-
-    const map = new Map<number, [index: number, x: number]>();
+  private _getOriginAxis(points: T[]) {
+    const { getLatLng } = this._options;
 
     const pointsLength = points.length;
 
-    const yAxis = new Float64Array(pointsLength);
-    const xAxis = new Float64Array(pointsLength);
-    const ids = new Int32Array(pointsLength);
+    const yOrigin = new Float64Array(pointsLength);
+    const xOrigin = new Float64Array(pointsLength);
 
-    const { getLatLng } = this._options;
-
-    const f1 = (i: number) => {
+    const f = (i: number) => {
       const coords = getLatLng(points[i]);
 
-      let y = latToY(coords[0]);
-
-      while (map.has(y)) {
-        y += Number.EPSILON;
-      }
-
-      map.set(y, [i, lngToX(coords[1])]);
-      yAxis[i] = y;
+      xOrigin[i] = lngToX(coords[0]);
+      yOrigin[i] = latToY(coords[1]);
     };
 
     for (let i = pointsLength; i--; ) {
-      f1(i);
+      f(i);
     }
 
-    yAxis.sort();
+    return [yOrigin, xOrigin] as const;
+  }
 
-    const f2 = (i: number) => {
-      const v = map.get(yAxis[i])!;
+  load(points: T[]) {
+    const t1 = performance.now();
 
-      ids[i] = v[0];
+    const { minZoom, maxZoom, radius, extent } = this._options;
 
-      xAxis[i] = v[1];
-    };
+    const [yOrigin, xOrigin] = this._getOriginAxis(points);
 
-    for (let i = pointsLength; i--; ) {
-      f2(i);
-    }
+    this._setStore(
+      getData(yOrigin, xOrigin, minZoom, maxZoom, radius, extent),
+      points,
+      yOrigin,
+      minZoom,
+      maxZoom
+    );
 
-    const data: PointsData = [yAxis, xAxis, ids];
+    console.log(performance.now() - t1);
+  }
 
-    const zoomSplitter: number[] = [];
-
-    const clusters: number[] = [];
-
-    const clusterEndIndexes: number[] = [];
-
-    const fn3 = (z: number) => {
-      const r = pixelsToDistance(radius, extent, z);
-      const r2 = r * 2;
-
-      const l = data.length - 1;
-
-      const prevIds = data[l];
-      const prevXAxis = data[l - 1];
-      const prevYAxis = data[l - 2];
-
-      const pointsLength = prevYAxis.length;
-
-      const _yAxis: number[] = [];
-      const _xAxis: number[] = [];
-
-      let startIndex = 0;
-
-      type ClusterTuple = [
-        y: number,
-        x: number,
-        items: number[],
-        index: number
-      ];
-
-      const clustersMap = new Map<number, ClusterTuple>();
-
-      const fn1 = (i: number) => {
-        const y = prevYAxis[i];
-        const x = prevXAxis[i];
-
-        while (y > _yAxis[startIndex] + r2) {
-          startIndex++;
-        }
-
-        const fn1 = (j: number) => {
-          const _x = _xAxis[j];
-
-          if (x >= _x - r && x <= _x + r) {
-            const _y = _yAxis[j];
-
-            const id = prevIds[i];
-
-            if (clustersMap.has(_y)) {
-              const v = clustersMap.get(_y)!;
-
-              v[0] += y;
-              v[1] += x;
-              v[2].push(id);
-            } else {
-              clustersMap.set(_y, [_y + y, _x + x, [map.get(_y)![0], id], j]);
-            }
-
-            return true;
-          }
-
-          return false;
-        };
-
-        const fn2 = () => {
-          const l = _yAxis.length;
-
-          for (let j = startIndex; j < l; j++) {
-            if (fn1(j)) return false;
-          }
-
-          return true;
-        };
-
-        if (fn2()) {
-          _yAxis.push(y);
-          _xAxis.push(x);
-        }
-      };
-
-      for (let i = 0; i < pointsLength; i++) {
-        fn1(i);
-      }
-
-      if (clustersMap.size) {
-        const yAxis = new Float64Array(_yAxis);
-
-        const iterator = clustersMap.values();
-
-        const fn1 = () => {
-          const v: ClusterTuple = iterator.next().value;
-
-          const items = v[2];
-
-          const count = items.length;
-
-          let y = v[0] / count;
-
-          while (map.has(y)) {
-            y += Number.EPSILON;
-          }
-
-          map.set(y, [-clusters.push(count), v[1] / count]);
-
-          let allCount = 0;
-
-          for (let i = count; i--; ) {
-            const id = items[i];
-
-            allCount += id < 0 ? clusters[-id] : 1;
-          }
-
-          clusters.push(allCount, ...items);
-
-          yAxis[v[3]] = y;
-        };
-
-        for (let i = clustersMap.size; i--; ) {
-          fn1();
-        }
-
-        yAxis.sort();
-
-        const l = yAxis.length;
-
-        const xAxis = new Float64Array(l);
-        const ids = new Int32Array(l);
-
-        const fn2 = (i: number) => {
-          const v = map.get(yAxis[i])!;
-
-          ids[i] = v[0];
-
-          xAxis[i] = v[1];
-        };
-
-        for (let i = l; i--; ) {
-          fn2(i);
-        }
-
-        data.push(yAxis, xAxis, ids);
-        zoomSplitter.push(z);
-        clusterEndIndexes.push(clusters.length);
-      }
-    };
-
-    for (let z = maxZoom; z >= minZoom; z--) {
-      fn3(z);
-    }
+  private _setStore(
+    d: Data,
+    points: T[],
+    yOrigin: Float64Array,
+    minZoom: number,
+    maxZoom: number
+  ) {
+    const [data, zoomSplitter] = d;
 
     const store = new Map<number, PointsData>();
 
-    const _t = [maxZoom + 1, ...zoomSplitter, minZoom - 1];
+    const _t = [maxZoom + 1, ...Array.from(zoomSplitter), minZoom - 1];
 
     for (let i = 0; i < _t.length - 1; i++) {
       const index = i * 3;
@@ -377,35 +153,26 @@ class MarkerCluster<T> {
       }
     }
 
-    this.clusterEndIndexes = new Int32Array(clusterEndIndexes);
+    this._yOrigin = yOrigin;
 
-    this.zoomSplitter = new Int8Array(zoomSplitter);
+    this._zoomSplitter = zoomSplitter;
 
     this.points = points;
 
     this._store = store;
 
-    this._clusters = new Int32Array(clusters);
+    this._clusters = d[2];
 
-    console.log(performance.now() - t1);
-
-    // this._store = getStore(
-    //   map,
-    //   new Float64Array(arr).sort().buffer,
-    //   minZoom,
-    //   maxZoom,
-    //   radius,
-    //   extent
-    // );
+    this._clusterEndIndexes = d[3];
   }
 
   getZoom(clusterId: number) {
     clusterId = -clusterId;
 
-    const clusterEndIndexes = this.clusterEndIndexes;
+    const clusterEndIndexes = this._clusterEndIndexes;
 
     for (let i = clusterEndIndexes.length; i--; ) {
-      if (clusterEndIndexes[i] < clusterId) return this.zoomSplitter[i];
+      if (clusterEndIndexes[i] < clusterId) return this._zoomSplitter[i];
     }
 
     return -1;
@@ -415,8 +182,8 @@ class MarkerCluster<T> {
     return this._mapChildrenIds(this._getChildrenIds(clusterId));
   }
 
-  private _mapChildrenIds(items: number[]): Keksaw<T> {
-    const acc: Keksaw<T> = [];
+  private _mapChildrenIds(items: number[]): NestedArray<T> {
+    const acc: NestedArray<T> = [];
 
     const points = this.points;
 
@@ -459,8 +226,8 @@ class MarkerCluster<T> {
     southLat: number,
     eastLng: number,
     northLat: number,
-    getMarker: (point: T, lat: number, lng: number) => M,
-    getCluster: (count: number, id: number, lat: number, lng: number) => C,
+    getMarker: (point: T, lng: number, lat: number) => M,
+    getCluster: (lng: number, lat: number, count: number, id: number) => C,
     expand?: number
   ) {
     const value: (M | C)[] = [];
@@ -475,15 +242,16 @@ class MarkerCluster<T> {
 
     const points = this.points;
 
+    const yOrigin = this._yOrigin;
+
     const mutate = (index: number) => {
-      const y = yAxis[index];
-      const x = xAxis[index];
+      const lng = xToLng(xAxis[index]);
       const id = ids[index];
 
       value.push(
         id < 0
-          ? getCluster(clusters[-id], id, yToLat(y), xToLng(x))
-          : getMarker(points[id], yToLat(y), xToLng(x))
+          ? getCluster(lng, yToLat(yAxis[index]), clusters[-id], id)
+          : getMarker(points[id], lng, yToLat(yOrigin[id]))
       );
     };
 
