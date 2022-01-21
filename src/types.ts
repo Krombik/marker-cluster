@@ -1,5 +1,3 @@
-export type NestedArray<T> = (T | NestedArray<T>)[];
-
 export type Data = [PointsData, Int8Array, Int32Array, Int32Array];
 
 export type PointsData = [

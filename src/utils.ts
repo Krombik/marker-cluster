@@ -41,7 +41,7 @@ export const getData = (
   radius: number,
   extent: number
 ): Data => {
-  const map = new Map<number, [index: number, x: number]>();
+  const map = new Map<number, Map<number, number>>();
 
   const pointsLength = yOrigin.length;
 
@@ -50,13 +50,13 @@ export const getData = (
   const ids = new Int32Array(pointsLength);
 
   const f1 = (i: number) => {
-    let y = yOrigin[i];
+    const y = yOrigin[i];
 
-    while (map.has(y)) {
-      y += Number.EPSILON;
+    if (map.has(y)) {
+      map.get(y)!.set(xOrigin[i], i);
+    } else {
+      map.set(y, new Map().set(xOrigin[i], i));
     }
-
-    map.set(y, [i, xOrigin[i]]);
 
     yAxis[i] = y;
   };
@@ -67,16 +67,30 @@ export const getData = (
 
   yAxis.sort();
 
-  const f2 = (i: number) => {
-    const v = map.get(yAxis[i])!;
+  let i = pointsLength;
 
-    ids[i] = v[0];
+  const f2 = () => {
+    const v = map.get(yAxis[i++])!;
 
-    xAxis[i] = v[1];
+    const keys = v.keys();
+
+    const f1 = () => {
+      i--;
+
+      const x = keys.next().value;
+
+      xAxis[i] = x;
+
+      ids[i] = v.get(x)!;
+    };
+
+    for (let j = v.size; j--; ) {
+      f1();
+    }
   };
 
-  for (let i = pointsLength; i--; ) {
-    f2(i);
+  while (i--) {
+    f2();
   }
 
   const data: PointsData = [yAxis, xAxis, ids];
@@ -108,7 +122,9 @@ export const getData = (
 
     const clustersMap = new Map<number, ClusterTuple>();
 
-    const fn1 = (i: number) => {
+    let i = 0;
+
+    const fn1 = () => {
       const y = prevYAxis[i];
       const x = prevXAxis[i];
 
@@ -116,7 +132,9 @@ export const getData = (
         startIndex++;
       }
 
-      const fn1 = (j: number) => {
+      let j = startIndex;
+
+      const fn1 = () => {
         const _x = _xAxis[j];
 
         if (x >= _x - r && x <= _x + r) {
@@ -124,18 +142,32 @@ export const getData = (
 
           const id = prevIds[i];
 
-          if (clustersMap.has(_y)) {
-            const v = clustersMap.get(_y)!;
+          const key = pair(_y, _x);
+
+          if (clustersMap.has(key)) {
+            const v = clustersMap.get(key)!;
 
             v[0] += y;
             v[1] += x;
             v[2].push(id);
           } else {
-            clustersMap.set(_y, [_y + y, _x + x, [map.get(_y)![0], id], j]);
+            const _xMap = map.get(_y)!;
+
+            clustersMap.set(key, [_y + y, _x + x, [_xMap.get(_x)!, id], j]);
+
+            if (_xMap.size == 1) {
+              map.delete(_y);
+            } else {
+              _xMap.delete(_x);
+            }
           }
 
-          return true;
+          const xMap = map.get(y)!;
+
+          return xMap.size == 1 ? map.delete(y) : xMap.delete(x);
         }
+
+        j++;
 
         return false;
       };
@@ -143,8 +175,8 @@ export const getData = (
       const fn2 = () => {
         const l = _yAxis.length;
 
-        for (let j = startIndex; j < l; j++) {
-          if (fn1(j)) return false;
+        while (j < l) {
+          if (fn1()) return false;
         }
 
         return true;
@@ -154,10 +186,12 @@ export const getData = (
         _yAxis.push(y);
         _xAxis.push(x);
       }
+
+      i++;
     };
 
-    for (let i = 0; i < pointsLength; i++) {
-      fn1(i);
+    while (i < pointsLength) {
+      fn1();
     }
 
     if (clustersMap.size) {
@@ -172,13 +206,13 @@ export const getData = (
 
         const count = items.length;
 
-        let y = v[0] / count;
+        const y = v[0] / count;
 
-        while (map.has(y)) {
-          y += Number.EPSILON;
+        if (map.has(y)) {
+          map.get(y)!.set(v[1] / count, -clusters.push(count));
+        } else {
+          map.set(y, new Map().set(v[1] / count, -clusters.push(count)));
         }
-
-        map.set(y, [-clusters.push(count), v[1] / count]);
 
         let allCount = 0;
 
@@ -204,16 +238,30 @@ export const getData = (
       const xAxis = new Float64Array(l);
       const ids = new Int32Array(l);
 
-      const fn2 = (i: number) => {
-        const v = map.get(yAxis[i])!;
+      let i = l;
 
-        ids[i] = v[0];
+      const f2 = () => {
+        const v = map.get(yAxis[i++])!;
 
-        xAxis[i] = v[1];
+        const keys = v.keys();
+
+        const f1 = () => {
+          i--;
+
+          const x = keys.next().value;
+
+          xAxis[i] = x;
+
+          ids[i] = v.get(x)!;
+        };
+
+        for (let j = v.size; j--; ) {
+          f1();
+        }
       };
 
-      for (let i = l; i--; ) {
-        fn2(i);
+      while (i--) {
+        f2();
       }
 
       data.push(yAxis, xAxis, ids);
