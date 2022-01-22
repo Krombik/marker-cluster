@@ -1,7 +1,7 @@
 {
   "name": "marker-cluster",
   "version": "1.0.0",
-  "description": "",
+  "description": "typescript library for point clustering",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/Krombik/marker-cluster.git"
@@ -32,5 +32,12 @@
   },
   "files": [
     "dist"
+  ],
+  "keywords": [
+    "clustering",
+    "markers",
+    "cluster",
+    "points",
+    "supercluster"
   ]
 }

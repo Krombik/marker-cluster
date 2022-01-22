@@ -34,20 +34,25 @@ export type MarkerClusterOptions<T> = {
    * @default 256
    */
   extent?: number;
-  getLatLng: (item: T) => Coords;
+
+  getLngLat: (item: T) => Coords;
 };
 
-export type GetMarker<T, M> = (point: T, lng: number, lat: number) => M;
+export type MarkerMapper<T, M> = (point: T, lng: number, lat: number) => M;
 
-export type GetCluster<C> = (
+export type ClusterMapper<C> = (
   lng: number,
   lat: number,
   count: number,
-  id: number
+  clusterId: number
 ) => C;
 
 class MarkerCluster<T> {
-  points: T[];
+  /** `points` from last executed {@link MarkerCluster.loadAsync loadAsync} or {@link MarkerCluster.load load} */
+  points?: T[];
+  /**
+   * [Worker](https://developer.mozilla.org/en-US/docs/Web/API/Worker/Worker) instance, inits at first {@link MarkerCluster.loadAsync loadAsync} call
+   */
   worker?: Worker;
 
   private readonly _options: Required<MarkerClusterOptions<T>>;
@@ -66,6 +71,10 @@ class MarkerCluster<T> {
     });
   }
 
+  /**
+   * loads given points
+   * @param points points for clustering
+   */
   load(points: T[]) {
     const { minZoom, maxZoom, radius, extent } = this._options;
 
@@ -78,6 +87,10 @@ class MarkerCluster<T> {
     );
   }
 
+  /**
+   * same to {@link MarkerCluster.load load}, but do clustering at another thread
+   * @description this method use [Worker](https://developer.mozilla.org/en-US/docs/Web/API/Worker/Worker)
+   */
   async loadAsync(points: T[]) {
     this.worker ||= new Worker(new URL("./worker.js", import.meta.url), {
       type: "module",
@@ -107,85 +120,94 @@ class MarkerCluster<T> {
     return promise;
   }
 
+  /**
+   * @param expand for values in range (0..1) considered as percentage, otherwise as absolute pixels value to expand given `boundary`.
+   * @returns array of clusters and points for the given `zoom` and `boundary`
+   */
   getPoints<M, C>(
     zoom: number,
     westLng: number,
     southLat: number,
     eastLng: number,
     northLat: number,
-    getMarker: GetMarker<T, M>,
-    getCluster: GetCluster<C>,
+    markerMapper: MarkerMapper<T, M>,
+    clusterMapper: ClusterMapper<C>,
     expand?: number
   ) {
-    const value: (M | C)[] = [];
-
-    const { minZoom, maxZoom } = this._options;
-
-    const [yAxis, xAxis, ids] = this._store.get(
-      clamp(minZoom, zoom, maxZoom + 1)
-    )!;
-
-    const clusters = this._clusters;
-
     const points = this.points;
 
-    const mutate = (index: number) => {
-      const lng = xToLng(xAxis[index]);
-      const lat = yToLat(yAxis[index]);
-      const id = ids[index];
+    const value: (M | C)[] = [];
 
-      value.push(
-        id < 0
-          ? getCluster(lng, lat, clusters[-id], id)
-          : getMarker(points[id], lng, lat)
-      );
-    };
+    if (points) {
+      const { minZoom, maxZoom } = this._options;
 
-    let minY = boundedLatToY(northLat);
-    let maxY = boundedLatToY(southLat);
+      const [yAxis, xAxis, ids] = this._store.get(
+        clamp(minZoom, zoom, maxZoom + 1)
+      )!;
 
-    let expandX: number;
+      const clusters = this._clusters;
 
-    if (expand) {
-      const expandY =
-        Math.abs(expand) < 1
-          ? (maxY - minY) * expand
-          : (expandX = pixelsToDistance(expand, this._options.extent, zoom));
+      const mutate = (index: number) => {
+        const lng = xToLng(xAxis[index]);
+        const lat = yToLat(yAxis[index]);
+        const id = ids[index];
 
-      minY = clamp(0, minY - expandY, 1);
-      maxY = clamp(0, maxY + expandY, 1);
-    }
+        value.push(
+          id < 0
+            ? clusterMapper(lng, lat, clusters[-id], id)
+            : markerMapper(points[id], lng, lat)
+        );
+      };
 
-    let minX: number;
-    let maxX: number;
+      let minY = boundedLatToY(northLat);
+      let maxY = boundedLatToY(southLat);
 
-    if (eastLng - westLng < 360) {
-      minX = boundedLngToX(westLng);
-      maxX = eastLng == 180 ? 1 : boundedLngToX(eastLng);
+      let expandX: number;
 
       if (expand) {
-        expandX ||= Math.abs(maxX - minX) * expand;
+        const expandY =
+          Math.abs(expand) < 1
+            ? (maxY - minY) * expand
+            : (expandX = pixelsToDistance(expand, this._options.extent, zoom));
 
-        minX = clamp(0, minX - expandX, 1);
-        maxX = clamp(0, maxX + expandX, 1);
+        minY = clamp(0, minY - expandY, 1);
+        maxY = clamp(0, maxY + expandY, 1);
       }
 
-      if (minX > maxX) {
-        this._mutatePoints(mutate, yAxis, xAxis, 0, minY, maxX, maxY);
-        this._mutatePoints(mutate, yAxis, xAxis, minX, minY, 1, maxY);
+      let minX: number;
+      let maxX: number;
 
-        return value;
+      if (eastLng - westLng < 360) {
+        minX = boundedLngToX(westLng);
+        maxX = eastLng == 180 ? 1 : boundedLngToX(eastLng);
+
+        if (expand) {
+          expandX ||= Math.abs(maxX - minX) * expand;
+
+          minX = clamp(0, minX - expandX, 1);
+          maxX = clamp(0, maxX + expandX, 1);
+        }
+
+        if (minX > maxX) {
+          this._mutatePoints(mutate, yAxis, xAxis, 0, minY, maxX, maxY);
+          this._mutatePoints(mutate, yAxis, xAxis, minX, minY, 1, maxY);
+
+          return value;
+        }
+      } else {
+        minX = 0;
+        maxX = 1;
       }
-    } else {
-      minX = 0;
-      maxX = 1;
+
+      this._mutatePoints(mutate, yAxis, xAxis, minX, minY, maxX, maxY);
     }
-
-    this._mutatePoints(mutate, yAxis, xAxis, minX, minY, maxX, maxY);
 
     return value;
   }
 
+  /**
+   * @returns zoom level on which the cluster splits into several children, or `-1` if it cluster of several points with same coords
+   */
   getZoom(clusterId: number) {
     clusterId = -clusterId;
 
@@ -198,30 +220,35 @@ class MarkerCluster<T> {
     return -1;
   }
 
+  /**
+   * @returns array with children of cluster
+   */
   getChildren(clusterId: number) {
-    const childrenIds = this._getChildrenIds(clusterId);
+    const points = this.points;
 
     const children: (T | { clusterId: number; count: number })[] = [];
 
-    const points = this.points;
+    if (points) {
+      const childrenIds = this._getChildrenIds(clusterId);
 
-    const clusters = this._clusters;
+      const clusters = this._clusters;
 
-    const f1 = (id: number) => {
-      children.push(
-        id < 0 ? { clusterId: id, count: clusters[-id] } : points[id]
-      );
-    };
+      const f1 = (id: number) => {
+        children.push(
+          id < 0 ? { clusterId: id, count: clusters[-id] } : points[id]
+        );
+      };
 
-    for (let i = childrenIds.length; i--; ) {
-      f1(childrenIds[i]);
+      for (let i = childrenIds.length; i--; ) {
+        f1(childrenIds[i]);
+      }
     }
 
     return children;
   }
 
   private _getOriginAxis(points: T[]) {
-    const { getLatLng } = this._options;
+    const { getLngLat: getLatLng } = this._options;
 
     const pointsLength = points.length;
 
