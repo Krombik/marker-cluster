@@ -23,7 +23,7 @@
   "types": "./dist/index.d.ts",
   "unpkg": "./dist/marker-cluster.umd.js",
   "scripts": {
-    "build": "microbundle --workers",
+    "build": "microbundle -f modern,esm,amd,cjs --workers",
     "start": "microbundle watch --workers"
   },
   "devDependencies": {

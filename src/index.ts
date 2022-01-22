@@ -37,6 +37,15 @@ export type MarkerClusterOptions<T> = {
   getLatLng: (item: T) => Coords;
 };
 
+export type GetMarker<T, M> = (point: T, lng: number, lat: number) => M;
+
+export type GetCluster<C> = (
+  lng: number,
+  lat: number,
+  count: number,
+  id: number
+) => C;
+
 class MarkerCluster<T> {
   points: T[];
   worker?: Worker;
@@ -65,8 +74,7 @@ class MarkerCluster<T> {
     this._setStore(
       getData(yOrigin, xOrigin, minZoom, maxZoom, radius, extent),
       points,
-      minZoom,
-      maxZoom
+      minZoom
     );
   }
 
@@ -86,7 +94,7 @@ class MarkerCluster<T> {
     });
 
     this.worker.addEventListener("message", (e) => {
-      this._setStore(e.data, points, minZoom, maxZoom);
+      this._setStore(e.data, points, minZoom);
 
       resolve();
     });
@@ -105,8 +113,8 @@ class MarkerCluster<T> {
     southLat: number,
     eastLng: number,
     northLat: number,
-    getMarker: (point: T, lng: number, lat: number) => M,
-    getCluster: (lng: number, lat: number, count: number, id: number) => C,
+    getMarker: GetMarker<T, M>,
+    getCluster: GetCluster<C>,
     expand?: number
   ) {
     const value: (M | C)[] = [];
@@ -187,11 +195,29 @@ class MarkerCluster<T> {
       if (clusterEndIndexes[i] < clusterId) return this._zoomSplitter[i];
     }
 
-    return this._options.maxZoom + 1;
+    return -1;
   }
 
   getChildren(clusterId: number) {
-    return this._mapChildrenIds(this._getChildrenIds(clusterId));
+    const childrenIds = this._getChildrenIds(clusterId);
+
+    const children: (T | { clusterId: number; count: number })[] = [];
+
+    const points = this.points;
+
+    const clusters = this._clusters;
+
+    const f1 = (id: number) => {
+      children.push(
+        id < 0 ? { clusterId: id, count: clusters[-id] } : points[id]
+      );
+    };
+
+    for (let i = childrenIds.length; i--; ) {
+      f1(childrenIds[i]);
+    }
+
+    return children;
   }
 
   private _getOriginAxis(points: T[]) {
@@ -216,12 +242,12 @@ class MarkerCluster<T> {
     return [yOrigin, xOrigin] as const;
   }
 
-  private _setStore(d: Data, points: T[], minZoom: number, maxZoom: number) {
+  private _setStore(d: Data, points: T[], minZoom: number) {
     const [data, zoomSplitter] = d;
 
     const store = new Map<number, PointsData>();
 
-    const _t = [maxZoom + 1, ...Array.from(zoomSplitter), minZoom - 1];
+    const _t = [...Array.from(zoomSplitter), minZoom - 1];
 
     for (let i = 0; i < _t.length - 1; i++) {
       const index = i * 3;
@@ -248,28 +274,6 @@ class MarkerCluster<T> {
     this._clusters = d[2];
 
     this._clusterEndIndexes = d[3];
-  }
-
-  private _mapChildrenIds(items: number[]): (T | number)[] {
-    const acc: (T | number)[] = [];
-
-    const points = this.points;
-
-    const f1 = (i: number) => {
-      const id = items[i];
-
-      if (id < 0) {
-        acc.push(id);
-      } else {
-        acc.push(points[id]);
-      }
-    };
-
-    for (let i = items.length; i--; ) {
-      f1(i);
-    }
-
-    return acc;
   }
 
   private _getChildrenIds(clusterId: number) {

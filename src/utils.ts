@@ -33,44 +33,81 @@ export const pixelsToDistance = (
   zoom: number
 ) => pixels / (extent * Math.pow(2, zoom));
 
-export const getData = (
+const prepareData = (
   yOrigin: Float64Array,
   xOrigin: Float64Array,
-  minZoom: number,
-  maxZoom: number,
-  radius: number,
-  extent: number
-): Data => {
-  const map = new Map<number, Map<number, number>>();
+  maxZoom: number
+) => {
+  const yMap = new Map<number, Map<number, number>>();
 
-  const pointsLength = yOrigin.length;
+  type Duplicate = [items: number[], y: number, x: number];
 
-  const yAxis = new Float64Array(pointsLength);
-  const xAxis = new Float64Array(pointsLength);
-  const ids = new Int32Array(pointsLength);
+  const duplicatesMap = new Map<number, Duplicate>();
+
+  const _yAxis: number[] = [];
 
   const f1 = (i: number) => {
     const y = yOrigin[i];
+    const x = xOrigin[i];
 
-    if (map.has(y)) {
-      map.get(y)!.set(xOrigin[i], i);
+    if (yMap.has(y)) {
+      const xMap = yMap.get(y)!;
+
+      if (xMap.has(x)) {
+        const key = pair(y, x);
+
+        if (duplicatesMap.has(key)) {
+          duplicatesMap.get(key)![0].push(i);
+        } else {
+          duplicatesMap.set(key, [[xMap.get(x)!, i], y, x]);
+        }
+
+        return;
+      } else {
+        xMap.set(x, i);
+      }
     } else {
-      map.set(y, new Map().set(xOrigin[i], i));
+      yMap.set(y, new Map().set(x, i));
     }
 
-    yAxis[i] = y;
+    _yAxis.push(y);
   };
 
-  for (let i = pointsLength; i--; ) {
+  for (let i = yOrigin.length; i--; ) {
     f1(i);
   }
+
+  const clusters: number[] = [];
+
+  const zoomSplitter: number[] = [];
+
+  const clusterEndIndexes: number[] = [];
+
+  const pointsLength = _yAxis.length;
+
+  const yAxis = new Float64Array(_yAxis);
+  const xAxis = new Float64Array(pointsLength);
+  const ids = new Int32Array(pointsLength);
+
+  for (let i = duplicatesMap.size, iterator = duplicatesMap.values(); i--; ) {
+    const v: Duplicate = iterator.next().value;
+
+    const items = v[0];
+
+    yMap.get(v[1])!.set(v[2], -clusters.push(items.length));
+
+    clusters.push(items.length, ...items);
+  }
+
+  zoomSplitter.push(maxZoom + 1);
+  clusterEndIndexes.push(clusters.length);
 
   yAxis.sort();
 
   let i = pointsLength;
 
   const f2 = () => {
-    const v = map.get(yAxis[i++])!;
+    const v = yMap.get(yAxis[i++])!;
 
     const keys = v.keys();
 
@@ -93,13 +130,28 @@ export const getData = (
     f2();
   }
 
-  const data: PointsData = [yAxis, xAxis, ids];
+  return {
+    data: [yAxis, xAxis, ids] as PointsData,
+    zoomSplitter,
+    clusters,
+    clusterEndIndexes,
+    yMap,
+  };
+};
 
-  const zoomSplitter: number[] = [];
-
-  const clusters: number[] = [];
-
-  const clusterEndIndexes: number[] = [];
+export const getData = (
+  yOrigin: Float64Array,
+  xOrigin: Float64Array,
+  minZoom: number,
+  maxZoom: number,
+  radius: number,
+  extent: number
+): Data => {
+  const { data, yMap, zoomSplitter, clusters, clusterEndIndexes } = prepareData(
+    yOrigin,
+    xOrigin,
+    maxZoom
+  );
 
   const fn3 = (z: number) => {
     const r = pixelsToDistance(radius, extent, z);
@@ -151,20 +203,20 @@ export const getData = (
             v[1] += x;
             v[2].push(id);
           } else {
-            const _xMap = map.get(_y)!;
+            const _xMap = yMap.get(_y)!;
 
             clustersMap.set(key, [_y + y, _x + x, [_xMap.get(_x)!, id], j]);
 
             if (_xMap.size == 1) {
-              map.delete(_y);
+              yMap.delete(_y);
             } else {
               _xMap.delete(_x);
             }
           }
 
-          const xMap = map.get(y)!;
+          const xMap = yMap.get(y)!;
 
-          return xMap.size == 1 ? map.delete(y) : xMap.delete(x);
+          return xMap.size == 1 ? yMap.delete(y) : xMap.delete(x);
         }
 
         j++;
@@ -208,10 +260,10 @@ export const getData = (
 
         const y = v[0] / count;
 
-        if (map.has(y)) {
-          map.get(y)!.set(v[1] / count, -clusters.push(count));
+        if (yMap.has(y)) {
+          yMap.get(y)!.set(v[1] / count, -clusters.push(count));
         } else {
-          map.set(y, new Map().set(v[1] / count, -clusters.push(count)));
+          yMap.set(y, new Map().set(v[1] / count, -clusters.push(count)));
         }
 
         let allCount = 0;
@@ -241,7 +293,7 @@ export const getData = (
       let i = l;
 
       const f2 = () => {
-        const v = map.get(yAxis[i++])!;
+        const v = yMap.get(yAxis[i++])!;
 
         const keys = v.keys();
 
