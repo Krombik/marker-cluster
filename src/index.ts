@@ -11,6 +11,8 @@ import {
   getData,
 } from "./utils";
 
+export type ChildCluster = { clusterId: number; count: number };
+
 export type Coords = [lng: number, lat: number];
 
 export type MarkerClusterOptions<T> = {
@@ -226,7 +228,7 @@ class MarkerCluster<T> {
   getChildren(clusterId: number) {
     const points = this.points;
 
-    const children: (T | { clusterId: number; count: number })[] = [];
+    const children: (T | ChildCluster)[] = [];
 
     if (points) {
       const childrenIds = this._getChildrenIds(clusterId);
