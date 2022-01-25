@@ -1,6 +1,6 @@
 # marker-cluster
 
-Typescript library for point clustering
+Library for point clustering
 
 #### Why should I use MarkerCluster?
 
@@ -12,14 +12,26 @@ Typescript library for point clustering
 ## Example
 
 ```ts
-import MarkerCluster from 'marker-cluster';
+import MarkerCluster from "marker-cluster";
 
-const markerCluster = new MarkerCluster<Point>({
-  getLatLng: (v) => [v.lng, v.lat],
-  radius: 60,
+type Point = { lat: number; lng: number };
+
+const points: Point[] = [
+  { lat: -31.56391, lng: 147.154312 },
+  { lat: -33.718234, lng: 150.363181 },
+  { lat: -33.727111, lng: 150.371124 },
+  { lat: -33.848588, lng: 151.209834 },
+];
+
+const markerCluster = new MarkerCluster<Point>((v) => [v.lng, v.lat], {
+  radius: 75,
 });
 
 markerCluster.load(points);
+
+// or
+
+await markerCluster.loadAsync(points);
 
 const currPoints = markerCluster.getPoints(
   2,
@@ -28,8 +40,7 @@ const currPoints = markerCluster.getPoints(
   180,
   85,
   (point, lng, lat) => ({ point, lng, lat }),
-  (lng, lat, count, clusterId) => ({ count, clusterId, lng, lat }),
-  10
+  (lng, lat, count, clusterId) => ({ count, clusterId, lng, lat })
 );
 ```
 
@@ -53,16 +64,15 @@ const currPoints = markerCluster.getPoints(
 ## Constructor
 
 ```ts
-constructor(options: MarkerClusterOptions<T>)
+constructor(getLngLat: (item: T) => [lng: number, lat: number], options: MarkerClusterOptions)
 ```
 
-| Name        | Type                                                | Description                                       | Default |
-| :---------- | :-------------------------------------------------- | :------------------------------------------------ | :------ |
-| `extent?`   | `number`                                            | tile extent (radius is calculated relative to it) | `256`   |
-| `maxZoom?`  | `number`                                            | max zoom level to cluster the points on           | `16`    |
-| `minZoom?`  | `number`                                            | min zoom level to cluster the points on           | `0`     |
-| `radius?`   | `number`                                            | cluster radius in pixels                          | `60`    |
-| `getLngLat` | (`item`: `T`) => [`lng`: `number`, `lat`: `number`] |                                                   |         |
+| Name       | Type     | Description                                       | Default |
+| :--------- | :------- | :------------------------------------------------ | :------ |
+| `extent?`  | `number` | tile extent (radius is calculated relative to it) | `256`   |
+| `maxZoom?` | `number` | max zoom level to cluster the points on           | `16`    |
+| `minZoom?` | `number` | min zoom level to cluster the points on           | `0`     |
+| `radius?`  | `number` | cluster radius in pixels                          | `60`    |
 
 ## Methods
 
@@ -158,3 +168,9 @@ worker?: Worker;
 ```
 
 [Worker](https://developer.mozilla.org/en-US/docs/Web/API/Worker/Worker) instance, inits at first [loadAsync](#loadasync) call
+
+---
+
+## License
+
+MIT © [Krombik](https://github.com/Krombik)

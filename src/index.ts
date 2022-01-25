@@ -1,4 +1,12 @@
-import { Data, PointsData } from "./types";
+import {
+  ChildCluster,
+  ClusterMapper,
+  Coords,
+  Data,
+  MarkerClusterOptions,
+  MarkerMapper,
+  PointsData,
+} from "./types";
 import {
   clamp,
   pixelsToDistance,
@@ -11,43 +19,13 @@ import {
   getData,
 } from "./utils";
 
-export type ChildCluster = { clusterId: number; count: number };
-
-export type Coords = [lng: number, lat: number];
-
-export type MarkerClusterOptions<T> = {
-  /**
-   * min zoom level to cluster the points on
-   * @default 0
-   */
-  minZoom?: number;
-  /**
-   * max zoom level to cluster the points on
-   * @default 16
-   */
-  maxZoom?: number;
-  /**
-   * cluster radius in pixels
-   * @default 60
-   */
-  radius?: number;
-  /**
-   * tile extent (radius is calculated relative to it)
-   * @default 256
-   */
-  extent?: number;
-
-  getLngLat: (item: T) => Coords;
+export {
+  MarkerClusterOptions,
+  Coords,
+  MarkerMapper,
+  ClusterMapper,
+  ChildCluster,
 };
-
-export type MarkerMapper<T, M> = (point: T, lng: number, lat: number) => M;
-
-export type ClusterMapper<C> = (
-  lng: number,
-  lat: number,
-  count: number,
-  clusterId: number
-) => C;
 
 class MarkerCluster<T> {
   /** `points` from last executed {@link MarkerCluster.loadAsync loadAsync} or {@link MarkerCluster.load load} */
@@ -57,13 +35,17 @@ class MarkerCluster<T> {
    */
   worker?: Worker;
 
-  private readonly _options: Required<MarkerClusterOptions<T>>;
+  private readonly _options: Required<MarkerClusterOptions>;
+  private readonly _getLngLat: (item: T) => Coords;
+
   private _store = new Map<number, PointsData>();
   private _clusters: Int32Array;
   private _zoomSplitter: Int8Array;
   private _clusterEndIndexes: Int32Array;
 
-  constructor(options: MarkerClusterOptions<T>) {
+  constructor(getLngLat: (item: T) => Coords, options?: MarkerClusterOptions) {
+    this._getLngLat = getLngLat;
+
     this._options = Object.freeze({
       minZoom: 0,
       maxZoom: 16,
@@ -250,7 +232,7 @@ class MarkerCluster<T> {
   }
 
   private _getOriginAxis(points: T[]) {
-    const { getLngLat: getLatLng } = this._options;
+    const getLngLat = this._getLngLat;
 
     const pointsLength = points.length;
 
@@ -258,7 +240,7 @@ class MarkerCluster<T> {
     const xOrigin = new Float64Array(pointsLength);
 
     const f = (i: number) => {
-      const coords = getLatLng(points[i]);
+      const coords = getLngLat(points[i]);
 
       xOrigin[i] = lngToX(coords[0]);
       yOrigin[i] = latToY(coords[1]);
