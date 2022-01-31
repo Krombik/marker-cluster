@@ -21,23 +21,27 @@ export const xToLng = (x: number) => (x - 0.5) * 360;
 export const yToLat = (y: number) =>
   (360 * Math.atan(Math.exp((1 - y * 2) * Math.PI))) / Math.PI - 90;
 
-export const pair = (a: number, b: number) => {
-  const sum = a + b;
-
-  return (sum * (sum + 1)) / 2 + b;
-};
-
 export const pixelsToDistance = (
   pixels: number,
   extent: number,
   zoom: number
 ) => pixels / (extent * Math.pow(2, zoom));
 
-const prepareData = (
+export const getData = (
+  _pixelsToDistance: typeof pixelsToDistance,
   yOrigin: Float64Array,
   xOrigin: Float64Array,
-  maxZoom: number
-) => {
+  minZoom: number,
+  maxZoom: number,
+  radius: number,
+  extent: number
+): Data => {
+  const pair = (a: number, b: number) => {
+    const sum = a + b;
+
+    return (sum * (sum + 1)) / 2 + b;
+  };
+
   const yMap = new Map<number, Map<number, number>>();
 
   type Duplicate = [items: number[], y: number, x: number];
@@ -96,7 +100,11 @@ const prepareData = (
 
     yMap.get(v[1])!.set(v[2], -clusters.push(items.length));
 
-    clusters.push(items.length, ...items);
+    clusters.push(items.length);
+
+    for (let i = items.length; i--; ) {
+      clusters.push(items[i]);
+    }
   }
 
   zoomSplitter.push(maxZoom + 1);
@@ -130,31 +138,10 @@ const prepareData = (
     f2();
   }
 
-  return {
-    data: [yAxis, xAxis, ids] as PointsData,
-    zoomSplitter,
-    clusters,
-    clusterEndIndexes,
-    yMap,
-  };
-};
-
-export const getData = (
-  yOrigin: Float64Array,
-  xOrigin: Float64Array,
-  minZoom: number,
-  maxZoom: number,
-  radius: number,
-  extent: number
-): Data => {
-  const { data, yMap, zoomSplitter, clusters, clusterEndIndexes } = prepareData(
-    yOrigin,
-    xOrigin,
-    maxZoom
-  );
+  const data: PointsData = [yAxis, xAxis, ids];
 
   const fn3 = (z: number) => {
-    const r = pixelsToDistance(radius, extent, z);
+    const r = _pixelsToDistance(radius, extent, z);
     const r2 = r * 2;
 
     const l = data.length - 1;
@@ -268,13 +255,19 @@ export const getData = (
 
         let allCount = 0;
 
+        const index = clusters.length;
+
+        clusters.push(0);
+
         for (let i = count; i--; ) {
           const id = items[i];
+
+          clusters.push(id);
 
           allCount += id < 0 ? clusters[-id] : 1;
         }
 
-        clusters.push(allCount, ...items);
+        clusters[index] = allCount;
 
         yAxis[v[3]] = y;
       };

@@ -23,11 +23,12 @@
   "types": "./dist/index.d.ts",
   "unpkg": "./dist/marker-cluster.umd.js",
   "scripts": {
-    "build": "microbundle -f modern,esm,amd,cjs --workers",
-    "start": "microbundle watch --workers"
+    "build": "microbundle",
+    "start": "microbundle watch"
   },
   "devDependencies": {
     "microbundle": "^0.14.2",
+    "prettier": "^2.5.1",
     "typescript": "^4.5.5"
   },
   "files": [

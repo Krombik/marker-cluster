@@ -38,6 +38,7 @@ class MarkerCluster<T> {
   private readonly _options: Required<MarkerClusterOptions>;
   private readonly _getLngLat: (item: T) => Coords;
 
+  private _objectUrl: string;
   private _store = new Map<number, PointsData>();
   private _clusters: Int32Array;
   private _zoomSplitter: Int8Array;
@@ -65,7 +66,15 @@ class MarkerCluster<T> {
     const [yOrigin, xOrigin] = this._getOriginAxis(points);
 
     this._setStore(
-      getData(yOrigin, xOrigin, minZoom, maxZoom, radius, extent),
+      getData(
+        pixelsToDistance,
+        yOrigin,
+        xOrigin,
+        minZoom,
+        maxZoom,
+        radius,
+        extent
+      ),
       points,
       minZoom
     );
@@ -73,12 +82,23 @@ class MarkerCluster<T> {
 
   /**
    * same to {@link MarkerCluster.load load}, but do clustering at another thread
+   * @see {@link MarkerCluster.cleanUp cleanUp}
    * @description this method use [Worker](https://developer.mozilla.org/en-US/docs/Web/API/Worker/Worker)
    */
   async loadAsync(points: T[]) {
-    this.worker ||= new Worker(new URL("./worker.js", import.meta.url), {
-      type: "module",
-    });
+    this.worker ||= new Worker(
+      this._objectUrl ||
+        (this._objectUrl = URL.createObjectURL(
+          new Blob(
+            [
+              `self.onmessage=function(e){for(var f=e.data,s=(${getData.toString()})(${pixelsToDistance.toString()},f[0],f[1],f[2],f[3],f[4],f[5]),a=[],t=s[0],r=0;r<t.length;r++)a.push(t[r].buffer);a.push(s[1].buffer,s[2].buffer,s[3].buffer),self.postMessage(s,a)};`,
+            ],
+            { type: "application/javascript" }
+          )
+        ))
+    );
+
+    this.worker.onmessage;
 
     const { minZoom, maxZoom, extent, radius } = this._options;
 
@@ -102,6 +122,15 @@ class MarkerCluster<T> {
     );
 
     return promise;
+  }
+
+  /**
+   * if {@link MarkerCluster.loadAsync loadAsync} was called, use this method before {@link MarkerCluster MarkerCluster} instance has gone
+   */
+  cleanUp() {
+    this.worker?.terminate();
+
+    if (this._objectUrl) URL.revokeObjectURL(this._objectUrl);
   }
 
   /**
