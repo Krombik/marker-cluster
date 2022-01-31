@@ -5,7 +5,7 @@ Library for point clustering
 #### Why should I use MarkerCluster?
 
 - it is really fast
-- it could leverage [Worker](https://developer.mozilla.org/en-US/docs/Web/API/Worker/Worker) to avoid freezing while clustering a large amount of points
+- it could leverage [Worker](https://developer.mozilla.org/en-US/docs/Web/API/Worker/Worker) to avoid freezing while clustering a large amount of points (browsers only)
 - it does not dictate supplied points format
 - format of returned points is customizable
 
@@ -101,6 +101,16 @@ async loadAsync(points: T[]): Promise<void>
 Same to [load](#load), but do clustering at another thread
 
 > Note: this method use [Worker](https://developer.mozilla.org/en-US/docs/Web/API/Worker/Worker)
+
+---
+
+### cleanUp
+
+```ts
+cleanUp(): void
+```
+
+if [loadAsync](#loadasync) was called, use this method before `MarkerCluster` instance has gone
 
 ---
 
