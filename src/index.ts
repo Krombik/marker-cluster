@@ -98,8 +98,6 @@ class MarkerCluster<T> {
         ))
     );
 
-    this.worker.onmessage;
-
     const { minZoom, maxZoom, extent, radius } = this._options;
 
     const [yOrigin, xOrigin] = this._getOriginAxis(points);
@@ -130,7 +128,9 @@ class MarkerCluster<T> {
   cleanUp() {
     this.worker?.terminate();
 
-    if (this._objectUrl) URL.revokeObjectURL(this._objectUrl);
+    if (this._objectUrl) {
+      URL.revokeObjectURL(this._objectUrl);
+    }
   }
 
   /**
@@ -155,7 +155,7 @@ class MarkerCluster<T> {
       const { minZoom, maxZoom } = this._options;
 
       const [yAxis, xAxis, ids] = this._store.get(
-        clamp(minZoom, zoom, maxZoom + 1)
+        clamp(minZoom, Math.round(zoom), maxZoom + 1)
       )!;
 
       const clusters = this._clusters;
@@ -287,7 +287,9 @@ class MarkerCluster<T> {
 
     const store = new Map<number, PointsData>();
 
-    const _t = [...Array.from(zoomSplitter), minZoom - 1];
+    const _t = Array.from(zoomSplitter);
+
+    _t.push(minZoom - 1);
 
     for (let i = 0; i < _t.length - 1; i++) {
       const index = i * 3;
