@@ -1,14 +1,19 @@
-import { Data, PointsData } from "./types";
+import { Data } from "./types";
+
+export function noop() {}
 
 export const clamp = (min: number, value: number, max: number) =>
   Math.min(Math.max(value, min), max);
 
-export const lngToX = (lng: number) => lng / 360 + 0.5;
+export const lngToX = (lng: number) => 0.5 + lng / 360;
+
+const _4pi = 4 * Math.PI;
+const rad = 180 / Math.PI;
 
 export const latToY = (lat: number) => {
-  const sin = Math.sin((lat * Math.PI) / 180);
+  const sin = Math.sin(lat / rad);
 
-  return clamp(0, 0.5 - (0.25 * Math.log((1 + sin) / (1 - sin))) / Math.PI, 1);
+  return clamp(0, 0.5 - Math.log((1 + sin) / (1 - sin)) / _4pi, 1);
 };
 
 export const boundedLngToX = (lng: number) =>
@@ -16,10 +21,10 @@ export const boundedLngToX = (lng: number) =>
 
 export const boundedLatToY = (lat: number) => latToY(clamp(-90, lat, 90));
 
-export const xToLng = (x: number) => (x - 0.5) * 360;
+export const xToLng = (x: number) => (Math.min(x, 1) - 0.5) * 360;
 
 export const yToLat = (y: number) =>
-  (360 * Math.atan(Math.exp((1 - y * 2) * Math.PI))) / Math.PI - 90;
+  2 * rad * Math.atan(Math.exp((1 - y * 2) * Math.PI)) - 90;
 
 export const pixelsToDistance = (
   pixels: number,
@@ -27,302 +32,226 @@ export const pixelsToDistance = (
   zoom: number
 ) => pixels / (extent * Math.pow(2, zoom));
 
+export const getMaxPossibleCount = (
+  pointsCount: number,
+  maxZoom: number,
+  minZoom: number
+) => {
+  const diff = maxZoom - minZoom;
+
+  let n = pointsCount;
+
+  for (let i = 0; i < diff; i++) {
+    n = Math.floor(n / 2);
+
+    pointsCount += n;
+  }
+
+  return pointsCount;
+};
+
+export const getTypedArray = (max: number) =>
+  max < 256 ? Uint8Array : max < 65536 ? Uint16Array : Uint32Array;
+
 export const getData = (
-  _pixelsToDistance: typeof pixelsToDistance,
-  yOrigin: Float64Array,
-  xOrigin: Float64Array,
+  xAxis: Float64Array,
+  xArr: Float64Array,
+  yArr: Float64Array,
   minZoom: number,
   maxZoom: number,
   radius: number,
-  extent: number
+  extent: number,
+  dataMap: Map<number, number>,
+  _pixelsToDistance: typeof pixelsToDistance,
+  _getTypedArray: typeof getTypedArray
 ): Data => {
-  const pair = (a: number, b: number) => {
-    const sum = a + b;
+  const value = new Array(7);
 
-    return (sum * (sum + 1)) / 2 + b;
-  };
+  const pointsCount = xAxis.sort().length;
 
-  const yMap = new Map<number, Map<number, number>>();
+  const maxPossibleCount = xArr.length;
 
-  type Duplicate = [items: number[], y: number, x: number];
+  const maxPossibleClustersCount = maxPossibleCount - pointsCount;
 
-  const duplicatesMap = new Map<number, Duplicate>();
+  let parentPoints = new (_getTypedArray(pointsCount))(pointsCount);
 
-  const _yAxis: number[] = [];
+  const TypedArray = _getTypedArray(maxPossibleCount);
 
-  const f1 = (i: number) => {
-    const y = yOrigin[i];
-    const x = xOrigin[i];
+  const clustersZoom = new Uint8Array(maxPossibleClustersCount);
+  const clustersCount = new (_getTypedArray(maxPossibleClustersCount))(
+    maxPossibleClustersCount
+  );
+  const clustersFlat = new TypedArray(maxPossibleCount);
+  const clustersFlatNav = new TypedArray(maxPossibleClustersCount + 1);
 
-    if (yMap.has(y)) {
-      const xMap = yMap.get(y)!;
+  const queuePoints = new TypedArray((pointsCount || 1) - 1);
 
-      if (xMap.has(x)) {
-        const key = pair(y, x);
+  const zoomSplitter = [maxZoom + 1];
 
-        if (duplicatesMap.has(key)) {
-          duplicatesMap.get(key)![0].push(i);
+  let currClustersFlatIndex = 1;
+
+  for (let i = 0; i < pointsCount; i++) {
+    parentPoints[i] = dataMap.get(xAxis[i])!;
+  }
+
+  value.push(parentPoints);
+
+  const clustering = (zoom: number) => {
+    const parentPointsLength = parentPoints.length;
+
+    const nextZoomXAxis = new Float64Array(parentPointsLength);
+
+    const r = _pixelsToDistance(radius, extent, zoom);
+
+    const d = r * 2;
+
+    let nextZoomIndex = 0;
+
+    let stoppedAt = 0;
+
+    let queueIndex = 0;
+
+    const executeQueue = () => {
+      let nextQueueIndex = 0;
+
+      const currIndex = queueIndex ? queuePoints[0] : parentPoints[stoppedAt++];
+
+      let clusterSize = 1;
+
+      let trueClusterSize = 0;
+
+      let sumX = xArr[currIndex];
+      let sumY = yArr[currIndex];
+
+      const maxPossibleX = sumX + d;
+
+      const maxPossibleY = sumY + r;
+      const minPossibleY = sumY - r;
+
+      for (let i = 1; i < queueIndex; i++) {
+        const index = queuePoints[i];
+
+        const y = yArr[index];
+
+        if (y < maxPossibleY && y > minPossibleY) {
+          sumX += xArr[index];
+
+          sumY += y;
+
+          clusterSize++;
+
+          clustersFlat[currClustersFlatIndex++] = index;
+
+          trueClusterSize +=
+            ((index < pointsCount) as any) ||
+            clustersCount[index - pointsCount];
         } else {
-          duplicatesMap.set(key, [[xMap.get(x)!, i], y, x]);
+          queuePoints[nextQueueIndex++] = index;
         }
-
-        return;
-      } else {
-        xMap.set(x, i);
-      }
-    } else {
-      yMap.set(y, new Map().set(x, i));
-    }
-
-    _yAxis.push(y);
-  };
-
-  for (let i = yOrigin.length; i--; ) {
-    f1(i);
-  }
-
-  const clusters: number[] = [];
-
-  const zoomSplitter: number[] = [];
-
-  const clusterEndIndexes: number[] = [];
-
-  const pointsLength = _yAxis.length;
-
-  const yAxis = new Float64Array(_yAxis);
-  const xAxis = new Float64Array(pointsLength);
-  const ids = new Int32Array(pointsLength);
-
-  for (let i = duplicatesMap.size, iterator = duplicatesMap.values(); i--; ) {
-    const v: Duplicate = iterator.next().value;
-
-    const items = v[0];
-
-    yMap.get(v[1])!.set(v[2], -clusters.push(items.length));
-
-    clusters.push(items.length);
-
-    for (let i = items.length; i--; ) {
-      clusters.push(items[i]);
-    }
-  }
-
-  zoomSplitter.push(maxZoom + 1);
-  clusterEndIndexes.push(clusters.length);
-
-  yAxis.sort();
-
-  let i = pointsLength;
-
-  const f2 = () => {
-    const v = yMap.get(yAxis[i++])!;
-
-    const keys = v.keys();
-
-    const f1 = () => {
-      i--;
-
-      const x = keys.next().value;
-
-      xAxis[i] = x;
-
-      ids[i] = v.get(x)!;
-    };
-
-    for (let j = v.size; j--; ) {
-      f1();
-    }
-  };
-
-  while (i--) {
-    f2();
-  }
-
-  const data: PointsData = [yAxis, xAxis, ids];
-
-  const fn3 = (z: number) => {
-    const r = _pixelsToDistance(radius, extent, z);
-    const r2 = r * 2;
-
-    const l = data.length - 1;
-
-    const prevIds = data[l];
-    const prevXAxis = data[l - 1];
-    const prevYAxis = data[l - 2];
-
-    const pointsLength = prevYAxis.length;
-
-    const _yAxis: number[] = [];
-    const _xAxis: number[] = [];
-
-    let startIndex = 0;
-
-    type ClusterTuple = [y: number, x: number, items: number[], index: number];
-
-    const clustersMap = new Map<number, ClusterTuple>();
-
-    let i = 0;
-
-    const fn1 = () => {
-      const y = prevYAxis[i];
-      const x = prevXAxis[i];
-
-      while (y > _yAxis[startIndex] + r2) {
-        startIndex++;
       }
 
-      let j = startIndex;
+      for (; stoppedAt < parentPointsLength; stoppedAt++) {
+        const index = parentPoints[stoppedAt];
 
-      const fn1 = () => {
-        const _x = _xAxis[j];
+        const x = xArr[index];
 
-        if (x >= _x - r && x <= _x + r) {
-          const _y = _yAxis[j];
+        if (x < maxPossibleX) {
+          const y = yArr[index];
 
-          const id = prevIds[i];
+          if (y < maxPossibleY && y > minPossibleY) {
+            sumX += x;
 
-          const key = pair(_y, _x);
+            sumY += y;
 
-          if (clustersMap.has(key)) {
-            const v = clustersMap.get(key)!;
+            clusterSize++;
 
-            v[0] += y;
-            v[1] += x;
-            v[2].push(id);
+            clustersFlat[currClustersFlatIndex++] = index;
+
+            trueClusterSize +=
+              ((index < pointsCount) as any) ||
+              clustersCount[index - pointsCount];
           } else {
-            const _xMap = yMap.get(_y)!;
-
-            clustersMap.set(key, [_y + y, _x + x, [_xMap.get(_x)!, id], j]);
-
-            if (_xMap.size == 1) {
-              yMap.delete(_y);
-            } else {
-              _xMap.delete(_x);
-            }
+            queuePoints[nextQueueIndex++] = index;
           }
-
-          const xMap = yMap.get(y)!;
-
-          return xMap.size == 1 ? yMap.delete(y) : xMap.delete(x);
+        } else {
+          break;
         }
-
-        j++;
-
-        return false;
-      };
-
-      const fn2 = () => {
-        const l = _yAxis.length;
-
-        while (j < l) {
-          if (fn1()) return false;
-        }
-
-        return true;
-      };
-
-      if (fn2()) {
-        _yAxis.push(y);
-        _xAxis.push(x);
       }
 
-      i++;
+      if (trueClusterSize) {
+        sumX /= clusterSize;
+
+        while (dataMap.has(sumX)) {
+          sumX += Number.EPSILON;
+        }
+
+        const clusterIndex = dataMap.size;
+
+        const index = clusterIndex - pointsCount;
+
+        dataMap.set(sumX, clusterIndex);
+
+        xArr[clusterIndex] = sumX;
+
+        yArr[clusterIndex] = sumY / clusterSize;
+
+        clustersZoom[index] = zoom;
+
+        clustersCount[index] =
+          trueClusterSize +
+          (((currIndex < pointsCount) as any) ||
+            clustersCount[currIndex - pointsCount]);
+
+        clustersFlat[clustersFlatNav[index]] = currIndex;
+
+        clustersFlatNav[index + 1] = currClustersFlatIndex++;
+      }
+
+      nextZoomXAxis[nextZoomIndex++] = sumX;
+
+      queueIndex = nextQueueIndex;
     };
 
-    while (i < pointsLength) {
-      fn1();
+    while (stoppedAt < parentPointsLength || queueIndex > 1) {
+      executeQueue();
     }
 
-    if (clustersMap.size) {
-      const yAxis = new Float64Array(_yAxis);
+    if (queueIndex) {
+      nextZoomXAxis[nextZoomIndex++] = xArr[queuePoints[0]];
+    }
 
-      const iterator = clustersMap.values();
+    if (nextZoomIndex < parentPointsLength) {
+      const xAxis = nextZoomXAxis.subarray(0, nextZoomIndex).sort();
 
-      const fn1 = () => {
-        const v: ClusterTuple = iterator.next().value;
+      parentPoints = new (_getTypedArray(dataMap.size))(nextZoomIndex);
 
-        const items = v[2];
-
-        const count = items.length;
-
-        const y = v[0] / count;
-
-        if (yMap.has(y)) {
-          yMap.get(y)!.set(v[1] / count, -clusters.push(count));
-        } else {
-          yMap.set(y, new Map().set(v[1] / count, -clusters.push(count)));
-        }
-
-        let allCount = 0;
-
-        const index = clusters.length;
-
-        clusters.push(0);
-
-        for (let i = count; i--; ) {
-          const id = items[i];
-
-          clusters.push(id);
-
-          allCount += id < 0 ? clusters[-id] : 1;
-        }
-
-        clusters[index] = allCount;
-
-        yAxis[v[3]] = y;
-      };
-
-      for (let i = clustersMap.size; i--; ) {
-        fn1();
+      for (let i = 0; i < nextZoomIndex; i++) {
+        parentPoints[i] = dataMap.get(xAxis[i])!;
       }
 
-      yAxis.sort();
+      zoomSplitter.push(zoom);
 
-      const l = yAxis.length;
-
-      const xAxis = new Float64Array(l);
-      const ids = new Int32Array(l);
-
-      let i = l;
-
-      const f2 = () => {
-        const v = yMap.get(yAxis[i++])!;
-
-        const keys = v.keys();
-
-        const f1 = () => {
-          i--;
-
-          const x = keys.next().value;
-
-          xAxis[i] = x;
-
-          ids[i] = v.get(x)!;
-        };
-
-        for (let j = v.size; j--; ) {
-          f1();
-        }
-      };
-
-      while (i--) {
-        f2();
-      }
-
-      data.push(yAxis, xAxis, ids);
-      zoomSplitter.push(z);
-      clusterEndIndexes.push(clusters.length);
+      value.push(parentPoints);
     }
   };
 
-  for (let z = maxZoom; z >= minZoom; z--) {
-    fn3(z);
+  for (let zoom = maxZoom; zoom >= minZoom; zoom--) {
+    clustering(zoom);
   }
 
-  return [
-    data,
-    new Int8Array(zoomSplitter),
-    new Int32Array(clusters),
-    new Int32Array(clusterEndIndexes),
-  ];
+  zoomSplitter.push(minZoom - 1);
+
+  const maxIndex = dataMap.size;
+
+  const maxClustersIndex = maxIndex - pointsCount;
+
+  value[0] = xArr.subarray(0, maxIndex);
+  value[1] = yArr.subarray(0, maxIndex);
+  value[2] = clustersZoom.subarray(0, maxClustersIndex);
+  value[3] = clustersCount.subarray(0, maxClustersIndex);
+  value[4] = clustersFlat.subarray(0, currClustersFlatIndex);
+  value[5] = clustersFlatNav.subarray(0, maxClustersIndex + 1);
+  value[6] = new Int8Array(zoomSplitter);
+
+  return value as any;
 };

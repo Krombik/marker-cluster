@@ -1,12 +1,15 @@
-export type Data = [PointsData, Int8Array, Int32Array, Int32Array];
-
-export type PointsData = [
-  yAxis: Float64Array,
-  xAxis: Float64Array,
-  ids: Int32Array
+export type Data = [
+  xArr: Float64Array,
+  yArr: Float64Array,
+  clustersZoom: Uint8Array,
+  clustersCount: UintArray,
+  clustersFlat: UintArray,
+  clustersFlatNav: UintArray,
+  zoomSplitter: Int8Array,
+  indexes: UintArray
 ];
 
-export type ChildCluster = { clusterId: number; count: number };
+export type UintArray = Uint8Array | Uint16Array | Uint32Array;
 
 export type Coords = [lng: number, lat: number];
 
@@ -27,17 +30,23 @@ export type MarkerClusterOptions = {
    */
   radius?: number;
   /**
-   * tile extent (radius is calculated relative to it)
+   * size of the tile grid used for clustering
    * @default 256
    */
   extent?: number;
+  /**
+   * method to be called once the loading operation has finished executing
+   */
+  callback?(): void;
 };
 
-export type MarkerMapper<T, M> = (point: T, lng: number, lat: number) => M;
+export type MarkerMapper<T, M> = (point: T, uniqueKey: number) => M;
 
 export type ClusterMapper<C> = (
   lng: number,
   lat: number,
   count: number,
+  expandZoom: number,
+  uniqueKey: number,
   clusterId: number
 ) => C;

@@ -1,0 +1,11 @@
+{
+  "name": "benchmark",
+  "type": "module",
+  "dependencies": {
+    "marker-cluster": "../",
+    "supercluster": "^7.1.5"
+  },
+  "devDependencies": {
+    "benchmark": "^2.1.4"
+  }
+}

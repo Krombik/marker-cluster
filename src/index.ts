@@ -1,11 +1,10 @@
 import {
-  ChildCluster,
   ClusterMapper,
   Coords,
   Data,
   MarkerClusterOptions,
   MarkerMapper,
-  PointsData,
+  UintArray,
 } from "./types";
 import {
   clamp,
@@ -17,163 +16,185 @@ import {
   yToLat,
   xToLng,
   getData,
+  getMaxPossibleCount,
+  getTypedArray,
+  noop,
 } from "./utils";
 
-export {
-  MarkerClusterOptions,
-  Coords,
-  MarkerMapper,
-  ClusterMapper,
-  ChildCluster,
-};
+export type { MarkerClusterOptions, Coords, MarkerMapper, ClusterMapper };
 
 class MarkerCluster<T> {
-  /** `points` from last executed {@link MarkerCluster.loadAsync loadAsync} or {@link MarkerCluster.load load} */
+  /** The points from the last executed {@link MarkerCluster.loadAsync loadAsync} or {@link MarkerCluster.load load} method */
   points?: T[];
+  /** Indicates whether a loading operation is currently in progress */
+  isLoading = false;
+  /** method from {@link MarkerClusterOptions.callback options}, you can use it to update ui after calling {@link MarkerCluster.setZoom setZoom} and/or {@link MarkerCluster.setBounds setBounds}  */
+  callback: () => void;
   /**
    * [Worker](https://developer.mozilla.org/en-US/docs/Web/API/Worker/Worker) instance, inits at first {@link MarkerCluster.loadAsync loadAsync} call
    */
-  worker?: Worker;
+  static worker?: Worker;
 
-  private readonly _options: Required<MarkerClusterOptions>;
-  private readonly _getLngLat: (item: T) => Coords;
+  /**
+   * If {@link MarkerCluster.loadAsync loadAsync} was called, use this method to abandon {@link MarkerCluster.worker worker} if it needed
+   */
+  static cleanup = noop;
 
-  private _objectUrl: string;
-  private _store = new Map<number, PointsData>();
-  private _clusters: Int32Array;
-  private _zoomSplitter: Int8Array;
-  private _clusterEndIndexes: Int32Array;
-
-  constructor(getLngLat: (item: T) => Coords, options?: MarkerClusterOptions) {
+  /**
+   * @param getLngLat - function to get the latitude and longitude coordinates of a marker
+   * @param options - options for configuring the clustering
+   */
+  constructor(
+    getLngLat: (item: T) => Coords,
+    options: MarkerClusterOptions = {}
+  ) {
     this._getLngLat = getLngLat;
-
-    this._options = Object.freeze({
-      minZoom: 0,
-      maxZoom: 16,
-      radius: 60,
-      extent: 256,
-      ...options,
-    });
+    this._minZoom = options.minZoom || 0;
+    this._maxZoom = (options.maxZoom as any) >= 0 ? options.maxZoom! : 16;
+    this._radius = options.radius || 60;
+    this._extent = options.extent || 256;
+    this.callback = options.callback || noop;
   }
 
   /**
-   * loads given points
-   * @param points points for clustering
+   * Loads the given points and clusters them for each zoom level from {@link MarkerClusterOptions.maxZoom maxZoom} to {@link MarkerClusterOptions.minZoom minZoom}
+   * @param points - The points to be clustered
    */
-  load(points: T[]) {
-    const { minZoom, maxZoom, radius, extent } = this._options;
+  load = (points: T[]) => {
+    this.isLoading = true;
 
-    const [yOrigin, xOrigin] = this._getOriginAxis(points);
+    const dataMap = new Map<number, number>();
 
-    this._setStore(
-      getData(
-        pixelsToDistance,
-        yOrigin,
-        xOrigin,
-        minZoom,
-        maxZoom,
-        radius,
-        extent
-      ),
+    const args: any[] = this._getDataArgs(
       points,
-      minZoom
+      dataMap.has.bind(dataMap),
+      dataMap.set.bind(dataMap)
     );
-  }
+
+    args.push(dataMap, pixelsToDistance, getTypedArray);
+
+    this._setStore(points, getData.apply(null, args));
+
+    this.isLoading = false;
+
+    this.callback();
+
+    return this;
+  };
 
   /**
-   * same to {@link MarkerCluster.load load}, but do clustering at another thread
-   * @see {@link MarkerCluster.cleanUp cleanUp}
-   * @description this method use [Worker](https://developer.mozilla.org/en-US/docs/Web/API/Worker/Worker)
+   * Loads the given points and asynchronously clusters them for each zoom level from {@link MarkerClusterOptions.maxZoom maxZoom} to {@link MarkerClusterOptions.minZoom minZoom}
+   * @see {@link MarkerCluster.cleanup cleanup}
+   * @description this method use [Worker](https://developer.mozilla.org/en-US/docs/Web/API/Worker/Worker), fallbacks to {@link MarkerCluster.load load} if {@link MarkerCluster.worker worker} initializing was failed
    */
-  async loadAsync(points: T[]) {
-    this.worker ||= new Worker(
-      this._objectUrl ||
-        (this._objectUrl = URL.createObjectURL(
-          new Blob(
-            [
-              `self.onmessage=function(e){for(var f=e.data,s=(${getData.toString()})(${pixelsToDistance.toString()},f[0],f[1],f[2],f[3],f[4],f[5]),a=[],t=s[0],r=0;r<t.length;r++)a.push(t[r].buffer);a.push(s[1].buffer,s[2].buffer,s[3].buffer),self.postMessage(s,a)};`,
-            ],
-            { type: "application/javascript" }
-          )
-        ))
-    );
+  loadAsync = (points: T[]) =>
+    new Promise<this>((resolve) => {
+      this.isLoading = true;
 
-    const { minZoom, maxZoom, extent, radius } = this._options;
+      let worker: Worker;
 
-    const [yOrigin, xOrigin] = this._getOriginAxis(points);
+      try {
+        worker = MarkerCluster._getWorker();
+      } catch (err) {
+        return resolve(this.load(points));
+      }
 
-    let resolve: () => void;
+      const dataSet = new Set<number>();
 
-    const promise = new Promise<void>((_resolve) => {
-      resolve = _resolve;
+      const args: any[] = this._getDataArgs(
+        points,
+        dataSet.has.bind(dataSet),
+        dataSet.add.bind(dataSet)
+      );
+
+      const id = "randomUUID" in crypto ? crypto.randomUUID() : Math.random();
+
+      const listener = (e: MessageEvent) => {
+        const data = e.data;
+
+        if (data.pop() == id) {
+          worker.removeEventListener("message", listener);
+
+          this._setStore(points, data);
+
+          this.isLoading = false;
+
+          this.callback();
+
+          resolve(this);
+        }
+      };
+
+      worker.addEventListener("message", listener);
+
+      args.push(id);
+
+      worker.postMessage(args, [
+        args[0].buffer,
+        args[1].buffer,
+        args[2].buffer,
+      ]);
     });
 
-    this.worker.addEventListener("message", (e) => {
-      this._setStore(e.data, points, minZoom);
+  /**
+   * Sets current zoom level for {@link MarkerCluster.getPoints getPoints} method
+   */
+  setZoom = (zoom: number) => {
+    this._zoom = zoom;
 
-      resolve();
-    });
-
-    this.worker.postMessage(
-      [yOrigin, xOrigin, minZoom, maxZoom, radius, extent],
-      [yOrigin.buffer, xOrigin.buffer]
-    );
-
-    return promise;
-  }
+    return this;
+  };
 
   /**
-   * if {@link MarkerCluster.loadAsync loadAsync} was called, use this method before {@link MarkerCluster MarkerCluster} instance has gone
+   * Sets current bounds for {@link MarkerCluster.getPoints getPoints} method
+   * @param westLng - west longitude boundary
+   * @param southLat - south latitude boundary
+   * @param eastLng - east longitude boundary
+   * @param northLat - north latitude boundary
    */
-  cleanUp() {
-    this.worker?.terminate();
-
-    if (this._objectUrl) {
-      URL.revokeObjectURL(this._objectUrl);
-    }
-  }
-
-  /**
-   * @param expand for values in range (0..1) considered as percentage, otherwise as absolute pixels value to expand given `boundary`.
-   * @returns array of clusters and points for the given `zoom` and `boundary`
-   */
-  getPoints<M, C>(
-    zoom: number,
+  setBounds = (
     westLng: number,
     southLat: number,
     eastLng: number,
-    northLat: number,
+    northLat: number
+  ) => {
+    this._bounds = [westLng, southLat, eastLng, northLat];
+
+    return this;
+  };
+
+  /**
+   * @param expand - for values in range `(0..1)` considered as percentage, otherwise as absolute pixels value to expand given {@link MarkerCluster.setBounds bounds}
+   * @returns array of mapped clusters and points for the given {@link MarkerCluster.setZoom zoom} and {@link MarkerCluster.setBounds bounds}
+   */
+  getPoints = <M, C>(
     markerMapper: MarkerMapper<T, M>,
     clusterMapper: ClusterMapper<C>,
     expand?: number
-  ) {
+  ) => {
     const points = this.points;
+
+    const zoom = this._zoom;
+
+    const bounds = this._bounds;
 
     const value: (M | C)[] = [];
 
-    if (points) {
-      const { minZoom, maxZoom } = this._options;
-
-      const [yAxis, xAxis, ids] = this._store.get(
-        clamp(minZoom, Math.round(zoom), maxZoom + 1)
+    if (points && bounds && zoom >= 0) {
+      const ids = this._store.get(
+        clamp(this._minZoom, Math.round(zoom), this._maxZoom + 1)
       )!;
 
-      const clusters = this._clusters;
+      let minX = bounds[0];
+      let maxY = boundedLatToY(bounds[1]);
+      let maxX = bounds[2];
+      let minY = boundedLatToY(bounds[3]);
 
-      const mutate = (index: number) => {
-        const lng = xToLng(xAxis[index]);
-        const lat = yToLat(yAxis[index]);
-        const id = ids[index];
-
-        value.push(
-          id < 0
-            ? clusterMapper(lng, lat, clusters[-id], id)
-            : markerMapper(points[id], lng, lat)
-        );
-      };
-
-      let minY = boundedLatToY(northLat);
-      let maxY = boundedLatToY(southLat);
+      const mutate = this._getPointsMutator(
+        markerMapper,
+        clusterMapper,
+        value.push.bind(value)
+      );
 
       let expandX: number;
 
@@ -181,18 +202,22 @@ class MarkerCluster<T> {
         const expandY =
           Math.abs(expand) < 1
             ? (maxY - minY) * expand
-            : (expandX = pixelsToDistance(expand, this._options.extent, zoom));
+            : (expandX = pixelsToDistance(expand, this._extent, zoom));
 
         minY = clamp(0, minY - expandY, 1);
         maxY = clamp(0, maxY + expandY, 1);
       }
 
-      let minX: number;
-      let maxX: number;
+      if (maxX - minX < 360) {
+        minX = boundedLngToX(minX);
+        maxX = maxX == 180 ? 1 : boundedLngToX(maxX);
 
-      if (eastLng - westLng < 360) {
-        minX = boundedLngToX(westLng);
-        maxX = eastLng == 180 ? 1 : boundedLngToX(eastLng);
+        if (minX >= maxX) {
+          this._mutatePoints(mutate, ids, 0, minY, maxX, maxY);
+          this._mutatePoints(mutate, ids, minX, minY, 1, maxY);
+
+          return value;
+        }
 
         if (expand) {
           expandX ||= Math.abs(maxX - minX) * expand;
@@ -200,196 +225,248 @@ class MarkerCluster<T> {
           minX = clamp(0, minX - expandX, 1);
           maxX = clamp(0, maxX + expandX, 1);
         }
-
-        if (minX > maxX) {
-          this._mutatePoints(mutate, yAxis, xAxis, 0, minY, maxX, maxY);
-          this._mutatePoints(mutate, yAxis, xAxis, minX, minY, 1, maxY);
-
-          return value;
-        }
       } else {
         minX = 0;
         maxX = 1;
       }
 
-      this._mutatePoints(mutate, yAxis, xAxis, minX, minY, maxX, maxY);
+      this._mutatePoints(mutate, ids, minX, minY, maxX, maxY);
     }
 
     return value;
-  }
+  };
 
   /**
-   * @returns zoom level on which the cluster splits into several children, or `-1` if it cluster of several points with same coords
+   * @returns array with mapped children of cluster
    */
-  getZoom(clusterId: number) {
-    clusterId = -clusterId;
-
-    const clusterEndIndexes = this._clusterEndIndexes;
-
-    for (let i = clusterEndIndexes.length; i--; ) {
-      if (clusterEndIndexes[i] < clusterId) return this._zoomSplitter[i];
-    }
-
-    return -1;
-  }
-
-  /**
-   * @returns array with children of cluster
-   */
-  getChildren(clusterId: number) {
+  getChildren = <M, C>(
+    clusterId: number,
+    markerMapper: MarkerMapper<T, M>,
+    clusterMapper: ClusterMapper<C>
+  ) => {
     const points = this.points;
 
-    const children: (T | ChildCluster)[] = [];
+    const children: (M | C)[] = [];
 
     if (points) {
-      const childrenIds = this._getChildrenIds(clusterId);
+      const mutate = this._getPointsMutator(
+        markerMapper,
+        clusterMapper,
+        children.push.bind(children)
+      );
 
-      const clusters = this._clusters;
+      const end = this._clustersFlatNav[clusterId + 1];
 
-      const f1 = (id: number) => {
-        children.push(
-          id < 0 ? { clusterId: id, count: clusters[-id] } : points[id]
-        );
-      };
+      const clustersFlat = this._clustersFlat;
 
-      for (let i = childrenIds.length; i--; ) {
-        f1(childrenIds[i]);
+      for (let i = this._clustersFlatNav[clusterId]; i < end; i++) {
+        mutate(clustersFlat[i]);
       }
     }
 
     return children;
+  };
+
+  private readonly _getLngLat: (item: T) => Coords;
+  private readonly _minZoom: number;
+  private readonly _maxZoom: number;
+  private readonly _radius: number;
+  private readonly _extent: number;
+
+  private _store = new Map<number, UintArray>();
+
+  private _xArr: Float64Array;
+  private _yArr: Float64Array;
+  private _clustersZoom: Uint8Array;
+  private _clustersCount: UintArray;
+  private _clustersFlat: UintArray;
+  private _clustersFlatNav: UintArray;
+
+  private _zoom = -1;
+  private _bounds?: [
+    westLng: number,
+    southLat: number,
+    eastLng: number,
+    northLat: number
+  ];
+
+  private static _getWorker() {
+    if (!MarkerCluster.worker) {
+      const objectUrl = URL.createObjectURL(
+        new Blob(
+          [
+            `o=${getData.toString()};p=${pixelsToDistance.toString()};l=${getTypedArray.toString()};self.onmessage=function(n){for(var e=n.data,a=e.pop(),f=new Map,s=e[0],t=s.length,u=0;u<t;u++)f.set(s[u],u);e.push(f,p,l);var r=o.apply(null,e),c=r.map(function(n){return n.buffer});r.push(a),self.postMessage(r,c)}`,
+          ],
+          { type: "application/javascript" }
+        )
+      );
+
+      const worker = new Worker(objectUrl);
+
+      MarkerCluster.worker = worker;
+
+      MarkerCluster.cleanup = function () {
+        MarkerCluster.cleanup = noop;
+
+        worker.terminate();
+
+        URL.revokeObjectURL(objectUrl);
+
+        MarkerCluster.worker = undefined;
+      };
+    }
+
+    return MarkerCluster.worker;
   }
 
-  private _getOriginAxis(points: T[]) {
+  private _getDataArgs(
+    points: T[],
+    has: (Map<number, number> | Set<number>)["has"],
+    add: Map<number, number>["set"] | Set<number>["add"]
+  ) {
+    const maxZoom = this._maxZoom;
+    const minZoom = this._minZoom;
+
     const getLngLat = this._getLngLat;
 
-    const pointsLength = points.length;
+    const pointsCount = points.length;
 
-    const yOrigin = new Float64Array(pointsLength);
-    const xOrigin = new Float64Array(pointsLength);
+    const xAxis = new Float64Array(pointsCount);
 
-    const f = (i: number) => {
+    const maxPossibleCount = getMaxPossibleCount(pointsCount, maxZoom, minZoom);
+
+    const xArr = new Float64Array(maxPossibleCount);
+
+    const yArr = new Float64Array(maxPossibleCount);
+
+    for (let i = 0; i < pointsCount; i++) {
       const coords = getLngLat(points[i]);
 
-      xOrigin[i] = lngToX(coords[0]);
-      yOrigin[i] = latToY(coords[1]);
-    };
+      let x = lngToX(coords[0]);
 
-    for (let i = pointsLength; i--; ) {
-      f(i);
+      while (has(x)) {
+        x += Number.EPSILON;
+      }
+
+      add(x, i);
+
+      xArr[i] = x;
+
+      xAxis[i] = x;
+
+      yArr[i] = latToY(coords[1]);
     }
 
-    return [yOrigin, xOrigin] as const;
+    return [xAxis, xArr, yArr, minZoom, maxZoom, this._radius, this._extent];
   }
 
-  private _setStore(d: Data, points: T[], minZoom: number) {
-    const [data, zoomSplitter] = d;
-
-    const store = new Map<number, PointsData>();
-
-    const _t = Array.from(zoomSplitter);
-
-    _t.push(minZoom - 1);
-
-    for (let i = 0; i < _t.length - 1; i++) {
-      const index = i * 3;
-
-      const v: PointsData = [
-        data[index] as Float64Array,
-        data[index + 1] as Float64Array,
-        data[index + 2] as Int32Array,
-      ];
-
-      const next = _t[i + 1];
-
-      for (let j = _t[i]; j > next; j--) {
-        store.set(j, v);
-      }
-    }
-
-    this._zoomSplitter = zoomSplitter;
-
+  private _setStore(points: T[], data: Data) {
     this.points = points;
 
-    this._store = store;
+    this._xArr = data[0];
+    this._yArr = data[1];
+    this._clustersZoom = data[2];
+    this._clustersCount = data[3];
+    this._clustersFlat = data[4];
+    this._clustersFlatNav = data[5];
 
-    this._clusters = d[2];
+    const zoomSplitter = data[6];
 
-    this._clusterEndIndexes = d[3];
+    const l = zoomSplitter.length - 1;
+
+    const store = (this._store = new Map<number, UintArray>());
+
+    for (let i = 0; i < l; i++) {
+      const next = zoomSplitter[i + 1];
+
+      for (let j = zoomSplitter[i]; j > next; j--) {
+        store.set(j, data[7 + i] as UintArray);
+      }
+    }
   }
 
-  private _getChildrenIds(clusterId: number) {
-    clusterId = -clusterId;
+  private _getPointsMutator<M, C>(
+    markerMapper: MarkerMapper<T, M>,
+    clusterMapper: ClusterMapper<C>,
+    push: Array<M | C>["push"]
+  ) {
+    const xArr = this._xArr;
 
-    const arr: number[] = [];
+    const yArr = this._yArr;
 
-    const clusters = this._clusters;
+    const points = this.points!;
 
-    const l = clusterId + clusters[clusterId - 1] + 1;
+    const clustersCount = this._clustersCount;
 
-    for (let j = clusterId + 1; j < l; j++) {
-      arr.push(clusters[j]);
-    }
+    const clustersZoom = this._clustersZoom;
 
-    return arr;
+    const pointsCount = points.length;
+
+    return (index: number) => {
+      const x = xArr[index];
+
+      push(
+        index < pointsCount
+          ? markerMapper(points[index], x)
+          : clusterMapper(
+              xToLng(x),
+              yToLat(yArr[index]),
+              clustersCount[(index -= pointsCount)],
+              clustersZoom[index] + 1,
+              x,
+              index
+            )
+      );
+    };
   }
 
   private _mutatePoints(
     mutate: (index: number) => void,
-    yAxis: Float64Array,
-    xAxis: Float64Array,
+    ids: UintArray,
     minX: number,
     minY: number,
     maxX: number,
     maxY: number
   ) {
+    const xArr = this._xArr;
+
+    const yArr = this._yArr;
+
+    const l = ids.length - 1;
+
     let start = 0;
-    let end = yAxis.length - 1;
+    let end = l;
 
-    const fn1 = () => {
+    const fn = (x: number) => {
       const middle = Math.floor((start + end) / 2);
 
-      if (minY < yAxis[middle]) {
+      if (x < xArr[ids[middle]]) {
         end = middle - 1;
       } else {
         start = middle + 1;
       }
     };
 
-    while (yAxis[start] < minY) {
-      fn1();
+    while (xArr[ids[start]] < minX) {
+      fn(minX);
     }
 
-    end = yAxis.length - 1;
+    end = l;
 
-    const first = start;
+    let startIndex = start;
 
-    const fn2 = () => {
-      const middle = Math.floor((start + end) / 2);
-
-      if (maxY < yAxis[middle]) {
-        end = middle - 1;
-      } else {
-        start = middle + 1;
-      }
-    };
-
-    while (yAxis[end] > maxY) {
-      fn2();
+    while (xArr[ids[end]] > maxX) {
+      fn(maxX);
     }
 
-    end++;
+    for (++end; startIndex < end; startIndex++) {
+      const index = ids[startIndex];
 
-    const fn = (i: number) => {
-      const x = xAxis[i];
+      const y = yArr[index];
 
-      if (x >= minX && x <= maxX) {
-        mutate(i);
+      if (y > minY && y < maxY) {
+        mutate(index);
       }
-    };
-
-    for (let i = first; i < end; i++) {
-      fn(i);
     }
   }
 }
