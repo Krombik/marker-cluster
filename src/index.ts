@@ -85,7 +85,7 @@ class MarkerCluster<T> {
   /**
    * Loads the given points and asynchronously clusters them for each zoom level from {@link MarkerClusterOptions.maxZoom maxZoom} to {@link MarkerClusterOptions.minZoom minZoom}
    * @see {@link MarkerCluster.cleanup cleanup}
-   * @description this method use [Worker](https://developer.mozilla.org/en-US/docs/Web/API/Worker/Worker), fallbacks to {@link MarkerCluster.load load} if {@link MarkerCluster.worker worker} initializing was failed
+   * @description this method use [Worker](https://developer.mozilla.org/en-US/docs/Web/API/Worker/Worker) and fallbacks to {@link MarkerCluster.load load} if {@link MarkerCluster.worker worker} initializing was failed
    */
   loadAsync = (points: T[]) =>
     new Promise<this>((resolve) => {

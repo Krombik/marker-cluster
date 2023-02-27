@@ -113,7 +113,7 @@ async loadAsync(points: T[]): Promise<this>
 
 Loads the given points and asynchronously clusters them for each zoom level
 
-> Note: this method use [Worker](https://developer.mozilla.org/en-US/docs/Web/API/Worker/Worker), fallbacks to [load](#load) method if [worker](#worker) initializing was failed
+> Note: this method use [Worker](https://developer.mozilla.org/en-US/docs/Web/API/Worker/Worker) and fallbacks to [load](#load) method if [worker](#worker) initializing was failed
 
 ---
 
@@ -247,9 +247,17 @@ static worker?: Worker;
 ## Benchmark
 
 ```
-marker-cluster x 51.52 ops/sec ±1.45% (67 runs sampled)
-supercluster x 13.56 ops/sec ±1.36% (38 runs sampled)
+marker-cluster x 915 ops/sec ±1.65% (91 runs sampled)
+supercluster x 148 ops/sec ±1.12% (84 runs sampled)
+Fastest in loading 1,000 points is marker-cluster
+
+marker-cluster x 53.21 ops/sec ±0.97% (70 runs sampled)
+supercluster x 16.70 ops/sec ±1.63% (45 runs sampled)
 Fastest in loading 10,000 points is marker-cluster
+
+marker-cluster x 2.18 ops/sec ±2.44% (10 runs sampled)
+supercluster x 1.32 ops/sec ±1.22% (8 runs sampled)
+Fastest in loading 100,000 points is marker-cluster
 ```
 
 ## License
