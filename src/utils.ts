@@ -86,7 +86,7 @@ export const getData = (
 
   const queuePoints = new TypedArray((pointsCount || 1) - 1);
 
-  const zoomSplitter = new Uint8Array(maxZoom - minZoom + 1);
+  const zoomSplitter = new Uint8Array(maxZoom - minZoom + 2);
 
   let zoomSplitterIndex = 0;
 
