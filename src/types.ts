@@ -5,7 +5,7 @@ export type Data = [
   clustersCount: UintArray,
   clustersFlat: UintArray,
   clustersFlatNav: UintArray,
-  zoomSplitter: Int8Array,
+  zoomSplitter: Uint8Array,
   indexes: UintArray
 ];
 

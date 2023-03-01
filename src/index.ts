@@ -372,15 +372,11 @@ class MarkerCluster<T> {
 
     const zoomSplitter = data[6];
 
-    const l = zoomSplitter.length - 1;
-
     const store = (this._store = new Map<number, UintArray>());
 
-    for (let i = 0; i < l; i++) {
-      const next = zoomSplitter[i + 1];
-
-      for (let j = zoomSplitter[i]; j > next; j--) {
-        store.set(j, data[7 + i] as UintArray);
+    for (let i = zoomSplitter.length, zoom = this._minZoom; i--; ) {
+      for (let j = zoomSplitter[i]; j >= 0; j--) {
+        store.set(zoom++, data[7 + i] as UintArray);
       }
     }
   }

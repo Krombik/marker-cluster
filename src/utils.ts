@@ -86,7 +86,9 @@ export const getData = (
 
   const queuePoints = new TypedArray((pointsCount || 1) - 1);
 
-  const zoomSplitter = [maxZoom + 1];
+  const zoomSplitter = new Uint8Array(maxZoom - minZoom + 1);
+
+  let zoomSplitterIndex = 0;
 
   let currClustersFlatIndex = 1;
 
@@ -229,17 +231,17 @@ export const getData = (
         parentPoints[i] = dataMap.get(xAxis[i])!;
       }
 
-      zoomSplitter.push(zoom);
-
       value.push(parentPoints);
+
+      zoomSplitterIndex++;
+    } else {
+      zoomSplitter[zoomSplitterIndex]++;
     }
   };
 
   for (let zoom = maxZoom; zoom >= minZoom; zoom--) {
     clustering(zoom);
   }
-
-  zoomSplitter.push(minZoom - 1);
 
   const maxIndex = dataMap.size;
 
@@ -251,7 +253,7 @@ export const getData = (
   value[3] = clustersCount.subarray(0, maxClustersIndex);
   value[4] = clustersFlat.subarray(0, currClustersFlatIndex);
   value[5] = clustersFlatNav.subarray(0, maxClustersIndex + 1);
-  value[6] = new Int8Array(zoomSplitter);
+  value[6] = zoomSplitter.subarray(0, zoomSplitterIndex + 1);
 
   return value as any;
 };

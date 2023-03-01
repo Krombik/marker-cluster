@@ -1,6 +1,6 @@
 {
   "name": "marker-cluster",
-  "version": "2.0.1",
+  "version": "2.0.2",
   "description": "library for point clustering",
   "repository": {
     "type": "git",
