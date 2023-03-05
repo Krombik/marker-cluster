@@ -1,3 +1,4 @@
+/** @internal */
 export type Data = [
   xArr: Float64Array,
   yArr: Float64Array,
@@ -9,6 +10,7 @@ export type Data = [
   indexes: UintArray
 ];
 
+/** @internal */
 export type UintArray = Uint8Array | Uint16Array | Uint32Array;
 
 export type Coords = [lng: number, lat: number];

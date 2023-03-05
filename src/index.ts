@@ -38,7 +38,7 @@ class MarkerCluster<T> {
   /**
    * If {@link MarkerCluster.loadAsync loadAsync} was called, use this method to abandon {@link MarkerCluster.worker worker} if it needed
    */
-  static cleanup = noop;
+  static cleanup: () => void = noop;
 
   /**
    * @param getLngLat - function to get the latitude and longitude coordinates of a marker

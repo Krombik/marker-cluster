@@ -1,37 +1,47 @@
 import { Data } from "./types";
 
+/** @internal */
 export function noop() {}
 
+/** @internal */
 export const clamp = (min: number, value: number, max: number) =>
   Math.min(Math.max(value, min), max);
 
+/** @internal */
 export const lngToX = (lng: number) => 0.5 + lng / 360;
 
 const _4pi = 4 * Math.PI;
 const rad = 180 / Math.PI;
 
+/** @internal */
 export const latToY = (lat: number) => {
   const sin = Math.sin(lat / rad);
 
   return clamp(0, 0.5 - Math.log((1 + sin) / (1 - sin)) / _4pi, 1);
 };
 
+/** @internal */
 export const boundedLngToX = (lng: number) =>
   lngToX(((((lng + 180) % 360) + 360) % 360) - 180);
 
+/** @internal */
 export const boundedLatToY = (lat: number) => latToY(clamp(-90, lat, 90));
 
+/** @internal */
 export const xToLng = (x: number) => (Math.min(x, 1) - 0.5) * 360;
 
+/** @internal */
 export const yToLat = (y: number) =>
   2 * rad * Math.atan(Math.exp((1 - y * 2) * Math.PI)) - 90;
 
+/** @internal */
 export const pixelsToDistance = (
   pixels: number,
   extent: number,
   zoom: number
 ) => pixels / (extent * Math.pow(2, zoom));
 
+/** @internal */
 export const getMaxPossibleCount = (
   pointsCount: number,
   maxZoom: number,
@@ -50,9 +60,11 @@ export const getMaxPossibleCount = (
   return pointsCount;
 };
 
+/** @internal */
 export const getTypedArray = (max: number) =>
   max < 256 ? Uint8Array : max < 65536 ? Uint16Array : Uint32Array;
 
+/** @internal */
 export const getData = (
   xAxis: Float64Array,
   xArr: Float64Array,
