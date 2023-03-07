@@ -1,5 +1,5 @@
 import Supercluster from "supercluster";
-import MarkerCluster from "../dist/index.cjs";
+import MarkerCluster from "marker-cluster";
 import Benchmark from "benchmark";
 
 const round = (a, b) => {

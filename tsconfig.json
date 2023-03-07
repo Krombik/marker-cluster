@@ -2,7 +2,7 @@
   "compilerOptions": {
     "outDir": "dist",
     "module": "esnext",
-    "target": "es5",
+    "target": "ES2020",
     "lib": ["dom", "esnext"],
     "moduleResolution": "node",
     "sourceMap": true,
@@ -16,8 +16,14 @@
     "noUnusedParameters": false,
     "allowSyntheticDefaultImports": true,
     "skipLibCheck": true,
-    "stripInternal": true
+    "stripInternal": true,
+    "types": ["node"]
   },
-  "include": ["src"],
-  "exclude": ["node_modules", "dist", "example"]
+  "include": ["src", "scripts"],
+  "exclude": ["node_modules", "dist", "example"],
+  "ts-node": {
+    "esm": true,
+    "files": true,
+    "compilerOptions": { "noImplicitAny": false, "noImplicitThis": false }
+  }
 }

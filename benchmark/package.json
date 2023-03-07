@@ -2,7 +2,7 @@
   "name": "benchmark",
   "type": "module",
   "dependencies": {
-    "marker-cluster": "../",
+    "marker-cluster": "../build",
     "supercluster": "^7.1.5"
   },
   "devDependencies": {

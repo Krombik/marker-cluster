@@ -273,7 +273,7 @@ class MarkerCluster<T> {
   private readonly _radius: number;
   private readonly _extent: number;
 
-  private _store = new Map<number, UintArray>();
+  private _store: Map<number, UintArray>;
 
   private _xArr: Float64Array;
   private _yArr: Float64Array;
