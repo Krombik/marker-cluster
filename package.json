@@ -1,6 +1,6 @@
 {
   "name": "marker-cluster",
-  "version": "2.0.4",
+  "version": "2.0.7",
   "description": "library for point clustering",
   "repository": {
     "type": "git",
@@ -16,8 +16,7 @@
   "source": "src/index.ts",
   "scripts": {
     "build": "ts-node ./scripts/build.mts",
-    "prepare": "yarn build",
-    "publish": "npm publish build",
+    "release": "npm publish ./build",
     "bench": "node ./benchmark/index.mjs"
   },
   "devDependencies": {

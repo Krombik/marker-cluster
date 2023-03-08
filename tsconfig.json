@@ -20,7 +20,7 @@
     "types": ["node"]
   },
   "include": ["src", "scripts"],
-  "exclude": ["node_modules", "dist", "example"],
+  "exclude": ["node_modules", "build"],
   "ts-node": {
     "esm": true,
     "files": true,

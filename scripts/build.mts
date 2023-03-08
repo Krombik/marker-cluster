@@ -1,5 +1,6 @@
 import { build } from "tsup";
 import fs from "fs/promises";
+import ts from "typescript";
 import { FILES_TO_COPY } from "./constants.mjs";
 import { getMainPackageJson } from "./utils.mjs";
 
@@ -15,10 +16,36 @@ const run = async (outDir: string) => {
     clean: false,
     target: "es2020",
     treeshake: { preset: "smallest" },
-    dts: true,
+    dts: false,
     format: ["cjs", "esm"],
     platform: "browser",
   });
+
+  if (
+    ts
+      .createProgram(["src/index.ts"], {
+        emitDeclarationOnly: true,
+        declaration: true,
+        stripInternal: true,
+        outDir,
+      })
+      .emit().emitSkipped
+  ) {
+    throw new Error("TypeScript compilation failed");
+  }
+
+  const children = await fs.readdir(outDir);
+
+  for (let i = 0; i < children.length; i++) {
+    const path = `${outDir}/${children[i]}`;
+
+    if (
+      path.endsWith(".d.ts") &&
+      (await fs.readFile(path)).toString() === "export {};\n"
+    ) {
+      await fs.rm(path);
+    }
+  }
 
   await build({
     outDir,
